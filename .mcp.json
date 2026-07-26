@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "epub-test": {
+      "command": "/usr/bin/python3",
+      "args": [
+        "mcp/epub-test-mcp/server.py"
+      ]
+    }
+  }
+}

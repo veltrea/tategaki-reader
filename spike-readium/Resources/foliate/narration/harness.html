@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>narration harness</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: #000; overflow: hidden; }
+      /* 録画対象。オフスクリーン WebView 内なのでユーザーには見えない。 */
+      #stage { display: block; }
+    </style>
+  </head>
+  <body>
+    <canvas id="stage" width="720" height="1280"></canvas>
+    <script type="module" src="./harness.mjs"></script>
+  </body>
+</html>

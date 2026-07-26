@@ -1,0 +1,27 @@
+html {
+  writing-mode: vertical-rl;
+  -webkit-writing-mode: vertical-rl;
+  -epub-writing-mode: vertical-rl;
+  line-height: 1.8;
+  font-family: "Hiragino Mincho ProN", "YuMincho", serif;
+}
+body { margin: 1.5em; }
+h1 { font-size: 1.4em; margin-bottom: 1em; }
+p { text-indent: 1em; margin: 0; }
+
+/* 画像ページ用: 本文CSSの影響を排して、素の img 挙動を測る */
+body.image-page { margin: 0; padding: 0; }
+body.image-page img { display: block; }
+
+/* 余白測定ページ用: body の内容ボックスを可視化する */
+body.margin-probe {
+  background: #d9ecff;              /* body ボックス = 水色 */
+  border: 3px solid #0066cc;        /* body の端に青枠 */
+  box-sizing: border-box;
+}
+body.margin-probe .edge {
+  color: #cc0000;
+  font-weight: bold;
+  font-size: 0.9em;
+  text-indent: 0;
+}

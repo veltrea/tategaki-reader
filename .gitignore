@@ -1,0 +1,18 @@
+# Xcode / SwiftPM build artifacts
+DerivedData/
+.build/
+*.xcuserstate
+*.xcuserdatad/
+xcuserdata/
+
+# App runtime
+DroppedImports/
+
+# macOS
+.DS_Store
+
+# scratch
+scratchpad/
+
+# SwiftPM lockfile（*.resolved 誤検出回避・再生成される）
+**/Package.resolved

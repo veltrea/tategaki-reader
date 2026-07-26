@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="ja" lang="ja">
+<head><meta charset="UTF-8"/><title>余白測定</title><link rel="stylesheet" type="text/css" href="style.css"/>
+<style>
+  body.margin-probe { position: relative; }
+  .corner { position: absolute; color: #cc0000; font-weight: bold; font-size: 0.85em; text-indent: 0; }
+  .c-tl { top: 0; left: 0; }
+  .c-tr { top: 0; right: 0; }
+  .c-bl { bottom: 0; left: 0; }
+  .c-br { bottom: 0; right: 0; }
+</style>
+</head>
+<body class="margin-probe">
+<span class="corner c-tl">┏ TL 本文ボックス左上</span>
+<span class="corner c-tr">TR 右上 ┓</span>
+<span class="corner c-bl">┗ BL 左下</span>
+<span class="corner c-br">BR 右下 ┛</span>
+<h1>余白測定ページ</h1>
+<p>この水色の領域が本文ボックス（body）である。青い枠が body の端を示す。</p>
+<p>ビューポート（画面）の端から、この水色領域の端までの隙間が、実際に効いている余白である。縦書きでは左右（物理的な left / right）に余白が入るかどうかがここで見える。</p>
+<p>四隅の赤字マーカーが画面のどこに来るかをスクリーンショットで読めば、上下左右それぞれの余白量を測れる。</p>
+<p>本文行がこのボックスのどこまで届いているかも、余白の効き方の手掛かりになる。行末や行頭が枠にぴったり付いていれば、その辺の余白はゼロである。</p>
+</body>
+</html>

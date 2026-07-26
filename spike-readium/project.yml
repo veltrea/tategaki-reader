@@ -1,0 +1,52 @@
+name: EpubReaderSpike
+options:
+  bundleIdPrefix: com.veltrea
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  developmentLanguage: ja
+  knownRegions:
+    - ja
+    - en
+    - Base
+targets:
+  EpubReaderSpike:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Sources
+      - path: Resources
+        buildPhase: resources
+        # foliate は下でフォルダ参照として丸ごと入れる（ES モジュールのディレクトリ構造を保持）。
+        excludes:
+          - "foliate/**"
+      # foliate-js のホスト一式。フォルダ参照でバンドルするとサブディレクトリ構造が保たれ、
+      # reader.html の `./foliate-js/view.js` 相対 import が解決できる。
+      - path: Resources/foliate
+        type: folder
+        buildPhase: resources
+    info:
+      path: Sources/Info.plist
+      properties:
+        # VOICEVOX / AivisSpeech は http://127.0.0.1（平文）。
+        # Catalyst の App Transport Security がブロックするので localhost 通信を許可する。
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UILaunchScreen: {}
+        # OS 言語に追従（ja/en）。これでシステム提供のメニュー項目(Cut/Copy等)も OS 言語で出る。
+        CFBundleDevelopmentRegion: ja
+        CFBundleLocalizations:
+          - ja
+          - en
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.veltrea.EpubReaderSpike
+        SUPPORTS_MACCATALYST: "YES"
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

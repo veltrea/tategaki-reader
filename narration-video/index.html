@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>朗読動画メーカー（VOICEVOX + 縦書き発光）</title>
+    <style>
+      :root {
+        --panel: #1b1b1f;
+        --panel2: #26262c;
+        --line: #3a3a42;
+        --txt: #e8e6e0;
+        --accent: #ffd27a;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: system-ui, "Hiragino Sans", "Yu Gothic", sans-serif;
+        background: #111114;
+        color: var(--txt);
+        display: grid;
+        grid-template-columns: 360px 1fr;
+        height: 100vh;
+      }
+      .side {
+        background: var(--panel);
+        border-right: 1px solid var(--line);
+        padding: 16px;
+        overflow-y: auto;
+      }
+      .main {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: 16px;
+        min-width: 0;
+      }
+      h1 { font-size: 15px; margin: 0 0 12px; letter-spacing: 0.02em; }
+      label { display: block; font-size: 12px; margin: 12px 0 4px; color: #b8b6b0; }
+      textarea, select, input {
+        width: 100%;
+        background: var(--panel2);
+        color: var(--txt);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 8px;
+        font-size: 13px;
+      }
+      textarea { min-height: 130px; resize: vertical; line-height: 1.7; }
+      .row { display: flex; gap: 8px; }
+      .row > div { flex: 1; }
+      .colors { display: flex; gap: 8px; }
+      .colors input[type="color"] { padding: 2px; height: 34px; }
+      button {
+        margin-top: 14px;
+        width: 100%;
+        padding: 10px;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+        background: var(--panel2);
+        color: var(--txt);
+        font-size: 13px;
+        cursor: pointer;
+      }
+      button.primary { background: var(--accent); color: #1a1a1a; border-color: var(--accent); font-weight: 600; }
+      button:disabled { opacity: 0.4; cursor: not-allowed; }
+      .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .btns button { margin-top: 0; }
+      #status { font-size: 12px; color: var(--accent); margin-top: 12px; min-height: 32px; }
+      canvas {
+        background: #000;
+        max-width: 100%;
+        max-height: 78vh;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      .hint { font-size: 11px; color: #7a7872; margin-top: 6px; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <div class="side">
+      <h1>朗読動画メーカー</h1>
+
+      <label>朗読テキスト（改行で行分割・空行はポーズ）</label>
+      <textarea id="text">これは朗読動画メーカーの見本です。
+行ごとに音声を作り、読んでいる場所が光ります。
+
+空の行を入れると、そこで少し間があきます。</textarea>
+
+      <label>話者（VOICEVOX）</label>
+      <select id="speaker"><option>読み込み中…</option></select>
+
+      <div class="row">
+        <div>
+          <label>向き</label>
+          <select id="orientation">
+            <option value="vertical">縦書き</option>
+            <option value="horizontal">横書き</option>
+          </select>
+        </div>
+        <div>
+          <label>文字サイズ(px)</label>
+          <input id="fontSize" type="number" value="64" min="20" max="160" />
+        </div>
+      </div>
+
+      <label>フォント</label>
+      <select id="font">
+        <option value="'Hiragino Mincho ProN','Yu Mincho',serif">明朝（朗読向き）</option>
+        <option value="'Hiragino Sans','Yu Gothic',sans-serif">ゴシック</option>
+      </select>
+
+      <label>色（背景・文字・発光＝テーマ色）</label>
+      <div class="colors">
+        <input id="bg" type="color" value="#14110c" title="背景" />
+        <input id="fg" type="color" value="#c9c4b6" title="文字" />
+        <input id="accent" type="color" value="#ffd27a" title="発光/読み位置" />
+      </div>
+
+      <div class="row">
+        <div>
+          <label>行間ポーズ(秒)</label>
+          <input id="gap" type="number" value="0.15" step="0.05" min="0" />
+        </div>
+        <div>
+          <label>FPS</label>
+          <input id="fps" type="number" value="30" min="15" max="60" />
+        </div>
+      </div>
+      <label>ビットレート(Mbps)</label>
+      <input id="bitrate" type="number" value="8" min="1" max="40" />
+
+      <button id="generate" class="primary">① 音声＋タイムライン生成</button>
+      <div class="btns">
+        <button id="preview" disabled>② プレビュー</button>
+        <button id="stop">停止</button>
+      </div>
+      <button id="record" disabled>③ 録画して MP4 保存</button>
+
+      <div id="status">起動中…</div>
+      <div class="hint">
+        VOICEVOX を起動（:50021）した状態で使います。録画は再生時間ぶんリアルタイムで行われます。
+        MP4 非対応ブラウザでは自動的に WebM で保存します。
+      </div>
+    </div>
+
+    <div class="main">
+      <canvas id="stage" width="1920" height="1080"></canvas>
+    </div>
+
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>

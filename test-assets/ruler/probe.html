@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  /* リーダーのビューポートを模す */
+  html, body { margin:0; padding:0; height:100%; }
+  html { writing-mode: vertical-rl; -webkit-writing-mode: vertical-rl; }
+  body { }
+  /* リーダーが本文に当てている img ルールを再現したもの */
+  img, svg, image {
+    max-height: 90vh;
+    max-width: 100%;
+    height: auto;
+    width: auto;
+    object-fit: contain;
+  }
+</style>
+</head>
+<body>
+<img id="t" src="images/ruler-portrait.png" alt="portrait"/>
+<pre id="out" style="position:fixed;top:0;left:0;background:#000;color:#0f0;font:12px monospace;padding:6px;z-index:9;white-space:pre;"></pre>
+<script>
+window.addEventListener('load', () => {
+  const img = document.getElementById('t');
+  const r = img.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const data = {
+    viewport: [vw, vh],
+    imgRect: {left:r.left, top:r.top, right:r.right, bottom:r.bottom, w:r.width, h:r.height},
+    gaps: { left:r.left, top:r.top, right: vw - r.right, bottom: vh - r.bottom },
+    natural: [img.naturalWidth, img.naturalHeight]
+  };
+  document.getElementById('out').textContent = JSON.stringify(data, null, 2);
+  window.__probe = data;
+});
+</script>
+</body>
+</html>

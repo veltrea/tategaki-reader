@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="ja">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="bookid">urn:uuid:2f9a1c00-0000-4000-8000-vruler0000001</dc:identifier>
+    <dc:title>画像位置・余白 測定用メジャー本</dc:title>
+    <dc:language>ja</dc:language>
+    <dc:creator>veltrea</dc:creator>
+    <meta property="dcterms:modified">2026-07-23T00:00:00Z</meta>
+    <meta property="rendition:layout">reflowable</meta>
+    <meta property="rendition:spread">auto</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="css" href="style.css" media-type="text/css"/>
+    <item id="p001" href="p001.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p002" href="p002.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p003" href="p003.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p004" href="p004.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p005" href="p005.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p006" href="p006.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p007" href="p007.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p008" href="p008.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p009" href="p009.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p010" href="p010.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p011" href="p011.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p012" href="p012.xhtml" media-type="application/xhtml+xml"/>
+    <item id="imgP" href="images/ruler-portrait.png" media-type="image/png"/>
+    <item id="imgL" href="images/ruler-landscape.png" media-type="image/png"/>
+    <item id="imgS" href="images/ruler-square.png" media-type="image/png"/>
+    <item id="imgLogo" href="images/small-logo.png" media-type="image/png"/>
+  </manifest>
+  <spine page-progression-direction="rtl">
+    <itemref idref="p001"/>
+    <itemref idref="p002"/>
+    <itemref idref="p003"/>
+    <itemref idref="p004"/>
+    <itemref idref="p005"/>
+    <itemref idref="p006"/>
+    <itemref idref="p007"/>
+    <itemref idref="p008"/>
+    <itemref idref="p009"/>
+    <itemref idref="p010"/>
+    <itemref idref="p011"/>
+    <itemref idref="p012"/>
+  </spine>
+</package>

@@ -1,0 +1,111 @@
+/* 書棚 / Library */
+"書棚" = "Library";
+"本を追加" = "Add Book";
+"本がありません" = "No books";
+"「本を追加」または EPUB をウィンドウにドラッグ＆ドロップ" = "Tap “Add Book” or drag & drop an EPUB onto the window.";
+"書棚から削除" = "Remove from Library";
+"読み込み中…" = "Loading…";
+"開く…" = "Open…";
+
+/* リーダー操作 / Reader controls */
+"見開きをずらす" = "Shift Spread";
+"選択語を読み上げ辞書に登録" = "Add selected word to the reading dictionary";
+"しおりを追加" = "Add Bookmark";
+"しおり一覧" = "Bookmarks";
+"文字サイズ・配色" = "Font Size & Theme";
+"文字サイズ" = "Font Size";
+"大きく" = "Larger";
+"小さく" = "Smaller";
+"配色" = "Theme";
+"ライト" = "Light";
+"セピア" = "Sepia";
+"ダーク" = "Dark";
+
+/* しおり / Bookmarks */
+"しおり" = "Bookmarks";
+"閉じる" = "Close";
+"しおりはありません" = "No bookmarks";
+"リーダー上部のしおりボタンで現在位置を保存できます。" = "Use the bookmark button at the top of the reader to save your current position.";
+"（本文位置）" = "(Position)";
+
+/* 読み上げ辞書 / Reading dictionary */
+"読み上げ辞書に登録" = "Add to Reading Dictionary";
+"登録" = "Register";
+"キャンセル" = "Cancel";
+"読み上げ辞書（単語・読み替えルール）" = "Reading dictionary (words & replacement rules)";
+"読み上げ辞書" = "Reading Dictionary";
+"登録された語はありません" = "No registered words";
+"語を追加" = "Add Word";
+"表記" = "Surface";
+"本文中の書き方（例: 斎ひとし）" = "As written in the text";
+"読み" = "Reading";
+"カタカナで入力（ひらがな可）" = "Enter in katakana (hiragana accepted)";
+"保存" = "Save";
+"この語を削除" = "Delete This Word";
+"語を編集" = "Edit Word";
+"テスト" = "Test";
+"試したい文を入力" = "Enter a sentence to try";
+
+/* 検索 / Search */
+"本文を検索" = "Search text";
+"検索中…" = "Searching…";
+"検索語を入力してください" = "Enter a search term";
+
+/* ステータス / Status */
+"単語を選択してから辞書登録してください" = "Select a word first, then add it to the dictionary.";
+"辞書登録に失敗（VOICEVOX起動確認）" = "Failed to add to dictionary (check that VOICEVOX is running).";
+
+/* 読み上げ音声の保存 / Save reading audio */
+"音声保存" = "Save Audio";
+"このセクションを音声保存" = "Save This Section as Audio";
+"保存先フォルダを選択…" = "Choose Save Folder…";
+"保存先: %@" = "Destination: %@";
+"ダウンロード（既定）" = "Downloads (default)";
+"セクションの文を収集中…" = "Collecting section text…";
+"保存する文がありません（VOICEVOX起動確認）" = "No text to save (check that VOICEVOX is running).";
+"音声を合成中… %lld / %lld" = "Synthesizing audio… %lld / %lld";
+"音声の連結に失敗しました" = "Failed to merge the audio.";
+"保存しました: %@" = "Saved: %@";
+"保存を中止しました" = "Save canceled.";
+
+/* セクション動画の保存 / Save reading video */
+"動画生成に失敗: %@" = "Video generation failed: %@";
+"動画生成がタイムアウトしました" = "Video generation timed out.";
+
+/* 設定シート / Settings sheet */
+"設定" = "Settings";
+"読み上げエンジン" = "TTS Engine";
+"エンジン状態" = "Engine Status";
+"接続済み (v%@)" = "Connected (v%@)";
+"未接続" = "Not connected";
+"話者" = "Speaker";
+"取得できません" = "Unavailable";
+"話速" = "Speed";
+"無音の長さ（改行・句読点の間）" = "Pause Length (breaks & punctuation)";
+"音声の保存先" = "Audio Save Location";
+"参照…" = "Browse…";
+"行間" = "Line Spacing";
+"テーマ" = "Theme";
+"自動" = "Auto";
+"言語" = "Language";
+"テスト再生" = "Test Playback";
+"保存" = "Save";
+"これはテスト再生です。" = "This is a test playback.";
+
+/* 書棚の「続きを読む」段 / Shelf continue-reading banner */
+"続きを読む" = "Continue Reading";
+"読み始める" = "Start Reading";
+"%lld%% 読了" = "%lld%% read";
+"ファイルが見つかりません" = "File not found";
+
+/* 書字方向（縦書き／横書きの強制）/ Writing mode override */
+"書字方向" = "Writing Mode";
+"縦書き" = "Vertical";
+"横書き" = "Horizontal";
+"書字方向（縦書き／横書き）" = "Writing mode (vertical / horizontal)";
+"EPUB の縦書き指定は欠けていることが多いので、自動でうまくいかない本はリーダーの書字方向メニューで本ごとに上書きできます。" = "EPUB files often omit their vertical-writing declaration, so when Auto gets it wrong you can override the writing mode per book from the reader's writing-mode menu.";
+
+/* 目次サイドバー / Table of contents sidebar */
+"目次" = "Contents";
+"この本には目次がありません。" = "This book has no table of contents.";
+"（無題）" = "(untitled)";

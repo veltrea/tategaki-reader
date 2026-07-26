@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="ja">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="bookid">urn:uuid:2f9a1c00-0000-4000-8000-vspike000001</dc:identifier>
+    <dc:title>縦書きスパイク見本</dc:title>
+    <dc:language>ja</dc:language>
+    <dc:creator>veltrea</dc:creator>
+    <meta property="dcterms:modified">2026-07-23T00:00:00Z</meta>
+    <meta property="rendition:layout">reflowable</meta>
+    <meta property="rendition:spread">auto</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="css" href="style.css" media-type="text/css"/>
+    <item id="p001" href="p001.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p002" href="p002.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p003" href="p003.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine page-progression-direction="rtl">
+    <itemref idref="p001"/>
+    <itemref idref="p002"/>
+    <itemref idref="p003"/>
+  </spine>
+</package>
