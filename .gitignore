@@ -19,3 +19,6 @@ scratchpad/
 
 # scripts/run.sh がワークツリーごとに決めるテストバスのポート（機械が書く）
 .testbus-port
+
+# 配布用のビルド成果物（GitHub Releases に上げるもの。リポジトリには入れない）
+dist/

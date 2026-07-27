@@ -80,6 +80,22 @@ The methodology itself is documented under `docs/`.
 - [`mcp/epub-test-mcp/`](mcp/epub-test-mcp/) — the MCP server itself (Python, no external dependencies)
 - [`test-assets/ruler/`](test-assets/ruler/) — a measurement EPUB with scales burned into all four edges
 
+## Download
+
+Prebuilt apps live on the [Releases](https://github.com/veltrea/tategaki-reader/releases) page. Unpack the ZIP and drop `EpubReaderSpike.app` into `/Applications`.
+
+The app is **ad-hoc signed** — no Apple Developer account ($99/year) involved — so macOS asks you to confirm the first launch.
+
+1. **Right-click → Open** (a double-click will not work), then Open again
+2. Or go to System Settings → Privacy & Security → Open Anyway
+3. Or, from a terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/EpubReaderSpike.app
+```
+
+Once allowed, it launches normally from then on: the signature on a released build is fixed, so the permission sticks. The app is not notarized. If you need that, fork it and sign with your own Developer ID.
+
 ## Build
 
 Requirements: Xcode, [XcodeGen](https://github.com/yonaskolb/XcodeGen)

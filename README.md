@@ -80,6 +80,22 @@ Kindle 出版のお手伝いを何度かやったことがあるのですが、�
 - [`mcp/epub-test-mcp/`](mcp/epub-test-mcp/) — MCP サーバー本体（Python・外部依存なし）
 - [`test-assets/ruler/`](test-assets/ruler/) — 四辺に目盛りを焼き込んだ測定用 EPUB
 
+## ダウンロード
+
+ビルド済みのアプリを [Releases](https://github.com/veltrea/tategaki-reader/releases) に置いてあります。ZIP を展開して `EpubReaderSpike.app` を `/Applications` へ入れてください。
+
+Apple Developer アカウント（年 $99）を使わない **ad-hoc 署名**なので、初回だけ macOS の警告を越える操作が要ります。
+
+1. **右クリック →「開く」**（ダブルクリックでは開けません）→ もう一度「開く」
+2. あるいは システム設定 → プライバシーとセキュリティ →「このまま開く」
+3. コマンドでよければ:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/EpubReaderSpike.app
+```
+
+一度許可すれば以降はそのまま起動します（ad-hoc でも配布物の署名は固定なので、許可は保持されます）。notarize（Apple の公証）は付いていません。必要な方はフォークして各自の Developer ID で署名してください。
+
 ## ビルド
 
 必要なもの: Xcode、[XcodeGen](https://github.com/yonaskolb/XcodeGen)
