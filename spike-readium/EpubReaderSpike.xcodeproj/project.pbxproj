@@ -8,7 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		03DFD90968615E416DA40CF0 /* VideoNarrationRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38D03895E0645EFBA666F08A /* VideoNarrationRenderer.swift */; };
+		04AA99BABA23AF5D431AF99C /* TranslationPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0A58F9DDFB8A03643919FD /* TranslationPane.swift */; };
 		15DFED8A83D61FB08D03B0DF /* TTSAudioSaver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03D573F149E65209164B85F4 /* TTSAudioSaver.swift */; };
+		18B14BF401C71F3FE4118C64 /* DisplayCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1F8A7D566B99734D48B0562 /* DisplayCommands.swift */; };
 		1ABA0FC27E024EF571F9F350 /* Library.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AB44F229D6E6DE0A5BB26E4 /* Library.swift */; };
 		2F145E192713C3A0D4875188 /* ReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FC769A96DB30A34B831DDB8 /* ReaderView.swift */; };
 		3C84954F58E1B386E4F41F0B /* FoliateReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8925D95E7F19435BB06500D5 /* FoliateReader.swift */; };
@@ -21,6 +23,7 @@
 		89FD67B4F5FC93078E87D77A /* VoicevoxTTSEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 162FADBB4A8A880F7957A41E /* VoicevoxTTSEngine.swift */; };
 		9A7B5101FC4DEBF9E2ED63B9 /* ruler-measure.epub in Resources */ = {isa = PBXBuildFile; fileRef = 0AF9BE298C97BA9EB2DBE7D9 /* ruler-measure.epub */; };
 		A4C38CE6A28C74C89E2002CD /* EpubReaderSpikeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6FB015C918A64ECEC1E4BB6 /* EpubReaderSpikeApp.swift */; };
+		C49BC15733E685B5B3564518 /* Translation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35BA0D5214686FB71EAF8CA0 /* Translation.swift */; };
 		DFAF7FE30F5D9A2CEFCA825F /* ShelfView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC8FEB9EBE7FA0E4686265DD /* ShelfView.swift */; };
 		F82C6FA3D5AAE1992A7BA672 /* ReadingRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = 931162CD4177C584D7685B79 /* ReadingRules.swift */; };
 /* End PBXBuildFile section */
@@ -30,6 +33,7 @@
 		03D573F149E65209164B85F4 /* TTSAudioSaver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSAudioSaver.swift; sourceTree = "<group>"; };
 		0AF9BE298C97BA9EB2DBE7D9 /* ruler-measure.epub */ = {isa = PBXFileReference; path = "ruler-measure.epub"; sourceTree = "<group>"; };
 		162FADBB4A8A880F7957A41E /* VoicevoxTTSEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicevoxTTSEngine.swift; sourceTree = "<group>"; };
+		35BA0D5214686FB71EAF8CA0 /* Translation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Translation.swift; sourceTree = "<group>"; };
 		38D03895E0645EFBA666F08A /* VideoNarrationRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoNarrationRenderer.swift; sourceTree = "<group>"; };
 		3B8D1326EA355EED3C6EEBC4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		44711A1AA6D33276405803C2 /* EpubReaderSpike.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = EpubReaderSpike.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -43,7 +47,9 @@
 		A6FB015C918A64ECEC1E4BB6 /* EpubReaderSpikeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EpubReaderSpikeApp.swift; sourceTree = "<group>"; };
 		BC8FEB9EBE7FA0E4686265DD /* ShelfView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShelfView.swift; sourceTree = "<group>"; };
 		CD69D90E2309F5B0386B0962 /* sample-vertical.epub */ = {isa = PBXFileReference; path = "sample-vertical.epub"; sourceTree = "<group>"; };
+		CE0A58F9DDFB8A03643919FD /* TranslationPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationPane.swift; sourceTree = "<group>"; };
 		ED3C6C6CA496A274E2C4129F /* Localizable.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = Localizable.strings; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		F1F8A7D566B99734D48B0562 /* DisplayCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayCommands.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -62,6 +68,7 @@
 		4EBE2187A5A83E405AB10FA1 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				F1F8A7D566B99734D48B0562 /* DisplayCommands.swift */,
 				A6FB015C918A64ECEC1E4BB6 /* EpubReaderSpikeApp.swift */,
 				8925D95E7F19435BB06500D5 /* FoliateReader.swift */,
 				4D32831F0A4ED387AE858A8B /* Info.plist */,
@@ -71,6 +78,8 @@
 				001A8AB9279C3B411DCBF748 /* SettingsView.swift */,
 				BC8FEB9EBE7FA0E4686265DD /* ShelfView.swift */,
 				8E53A1BC25186E71A1717149 /* TestBus.swift */,
+				35BA0D5214686FB71EAF8CA0 /* Translation.swift */,
+				CE0A58F9DDFB8A03643919FD /* TranslationPane.swift */,
 				03D573F149E65209164B85F4 /* TTSAudioSaver.swift */,
 				38D03895E0645EFBA666F08A /* VideoNarrationRenderer.swift */,
 				162FADBB4A8A880F7957A41E /* VoicevoxTTSEngine.swift */,
@@ -170,6 +179,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				18B14BF401C71F3FE4118C64 /* DisplayCommands.swift in Sources */,
 				A4C38CE6A28C74C89E2002CD /* EpubReaderSpikeApp.swift in Sources */,
 				3C84954F58E1B386E4F41F0B /* FoliateReader.swift in Sources */,
 				1ABA0FC27E024EF571F9F350 /* Library.swift in Sources */,
@@ -179,6 +189,8 @@
 				DFAF7FE30F5D9A2CEFCA825F /* ShelfView.swift in Sources */,
 				15DFED8A83D61FB08D03B0DF /* TTSAudioSaver.swift in Sources */,
 				54435014BAC8864BB04DC2EE /* TestBus.swift in Sources */,
+				C49BC15733E685B5B3564518 /* Translation.swift in Sources */,
+				04AA99BABA23AF5D431AF99C /* TranslationPane.swift in Sources */,
 				03DFD90968615E416DA40CF0 /* VideoNarrationRenderer.swift in Sources */,
 				89FD67B4F5FC93078E87D77A /* VoicevoxTTSEngine.swift in Sources */,
 			);

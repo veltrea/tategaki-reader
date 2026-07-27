@@ -35,7 +35,7 @@ import sys
 import time
 
 import axdriver as ax
-from ApplicationServices import kAXChildrenAttribute
+from ApplicationServices import AXUIElementPerformAction, kAXChildrenAttribute
 
 APP = "EpubReaderSpike"
 BUS_HOST = "127.0.0.1"
@@ -92,6 +92,27 @@ def _collect(el, out, depth=0):
     return out
 
 
+def find_tabs(sheet):
+    """設定シートのタブ(AXTabGroup 配下の AXRadioButton)を [(ラベル, 要素)] で返す。
+
+    設定は「読み上げ / 表示」のタブに分かれており、選ばれていないタブの中身は
+    そもそも描かれない。全タブを順に選んで測らないと、切れているタブを見逃す。
+    """
+    out = []
+
+    def walk(el, depth=0):
+        info = ax._node_info(el)
+        if info["role"] == "AXRadioButton":
+            label = info.get("desc") or info.get("title") or "?"
+            out.append((label, el))
+        if depth < 22:
+            for k in (ax._attr(el, kAXChildrenAttribute) or []):
+                walk(k, depth + 1)
+
+    walk(sheet)
+    return out
+
+
 def measure(sheet_info, controls):
     sx, sy = sheet_info["pos"]
     sw, sh = sheet_info["size"]
@@ -142,18 +163,35 @@ def main():
               file=sys.stderr)
         return 2
 
-    controls = _collect(sheet, [])
-    worst, rows, (sx, sy, sw, sh) = measure(info, controls)
+    tabs = find_tabs(sheet)
+    # タブが無い版でも動くよう、見つからなければ現在の内容だけ測る。
+    targets = tabs or [(None, None)]
+    overall = -1e9
 
-    print(f"AXSheet 枠: x={sx:.0f} y={sy:.0f} w={sw:.0f} h={sh:.0f} "
-          f"(下端={sy+sh:.0f})  コントロール数={len(rows)}")
-    print(f"{'role':14} {'over(pt)':>9}  {'bottom':>7}  label")
-    for role, over, edges, label in sorted(rows, key=lambda r: -r[1]):
-        mark = "  <== はみ出し" if over > a.tol else ""
-        print(f"{role:14} {over:9.1f}  {edges['bottom']:7.1f}  {label}{mark}")
+    for tab_label, tab_el in targets:
+        if tab_el is not None:
+            AXUIElementPerformAction(tab_el, "AXPress")
+            time.sleep(0.8)
+            sheet, info = find_sheet()
+            if sheet is None:
+                print(f"[fail] タブ「{tab_label}」を選んだあとシートを見失った", file=sys.stderr)
+                return 2
 
-    ok = worst <= a.tol
-    print(f"\nworst はみ出し = {worst:.1f}pt / 許容 {a.tol:.1f}pt -> "
+        controls = _collect(sheet, [])
+        worst, rows, (sx, sy, sw, sh) = measure(info, controls)
+        overall = max(overall, worst)
+
+        head = f"タブ「{tab_label}」 " if tab_label else ""
+        print(f"{head}AXSheet 枠: x={sx:.0f} y={sy:.0f} w={sw:.0f} h={sh:.0f} "
+              f"(下端={sy+sh:.0f})  コントロール数={len(rows)}")
+        print(f"{'role':14} {'over(pt)':>9}  {'bottom':>7}  label")
+        for role, over, edges, label in sorted(rows, key=lambda r: -r[1]):
+            mark = "  <== はみ出し" if over > a.tol else ""
+            print(f"{role:14} {over:9.1f}  {edges['bottom']:7.1f}  {label}{mark}")
+        print()
+
+    ok = overall <= a.tol
+    print(f"worst はみ出し = {overall:.1f}pt / 許容 {a.tol:.1f}pt -> "
           f"{'PASS ✅' if ok else 'FAIL ❌'}")
     return 0 if ok else 1
 

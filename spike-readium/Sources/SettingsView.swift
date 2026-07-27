@@ -26,20 +26,60 @@ struct SettingsView: View {
     @State private var testSpeaker = VoicevoxSpeaker()
     @State private var testing = false
 
+    // 翻訳（LM Studio）。
+    @State private var translation = TranslationSettingsStore.load()
+    @State private var lmModels: [LMStudioModel] = []
+    @State private var lmProbing = false
+    @State private var lmReachable = false
+    @State private var cachedTranslations = 0
+
     private let engines: [(id: String, label: String)] = [
         ("voicevox", "VOICEVOX (:50021)"),
         ("aivis", "AivisSpeech (:10101)"),
     ]
 
+    /// 設定の分類。全部を1枚に積むと縦がモニタからはみ出すので、タブで分けて畳む。
+    enum SettingsTab: String, CaseIterable, Identifiable {
+        case audio, display
+
+        var id: String { rawValue }
+
+        var label: LocalizedStringKey {
+            switch self {
+            case .audio: return "読み上げ"
+            case .display: return "表示"
+            }
+        }
+    }
+
+    @State private var tab: SettingsTab = .audio
+
     var body: some View {
         NavigationStack {
-            Form {
-                engineSection
-                voiceSection
-                saveSection
-                displaySection
+            VStack(spacing: 0) {
+                Picker("", selection: $tab) {
+                    ForEach(SettingsTab.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 4)
+
+                Form {
+                    switch tab {
+                    case .audio:
+                        engineSection
+                        voiceSection
+                        saveSection
+                    case .display:
+                        displaySection
+                        debugSection
+                    }
+                    // 対訳（LM Studio）はまだ表に出さない。実装は translationSection に残してある。
+                }
+                .formStyle(.grouped)
             }
-            .formStyle(.grouped)
             .navigationTitle("設定")
             .toolbar {
                 ToolbarItemGroup(placement: .confirmationAction) {
@@ -59,14 +99,12 @@ struct SettingsView: View {
         }
         .frame(minWidth: 460)
         // Mac Catalyst の .sheet は UIKit フォームシートとして提示され、既定 ≈478×524 に
-        // 丸められる。content の .frame も .presentationDetents（iOS 用 API）も Catalyst の
-        // フォームシートには効かず、行数がこの高さを超えると最下行(「言語」)が下端で切れる。
-        // 唯一効くのは提示中ホスト VC の preferredContentSize。ブリッジで直接指定して全行を収める。
-        // preferredContentSize は Catalyst の iOS 座標系（≈0.77 倍で画面表示）で解釈されるため、
-        // 目標の実寸 ≒ 幅478×高さ616 pt を得るには 0.77 の逆数を掛けた値を渡す（620×800）。
-        // 実寸 ≒ 620×0.77=478、800×0.77=616。全11行(実測≒555pt)が余裕をもって収まる。
-        // 表示セクション（綴じ方向・見開き・アスペクト比）を足したぶん背を高くしてある。
-        .background { CatalystSheetSizer(size: CGSize(width: 700, height: 1180)) }
+        // 丸められる。content の .frame も .presentationDetents（iOS 用 API）も効かず、
+        // 行が増えると下端で切れる。ここでは画面上の実寸で欲しい大きさを渡し、
+        // 座標系の換算と画面内への切り詰めは FittedSheetSizing に任せる（詳細はそちらの注記）。
+        // 全項目を1枚に積むと画面高 900pt 級のモニタからはみ出しかけるので、タブで分けて
+        // 一番丈の高いタブ（表示）がちょうど収まる大きさにしてある。
+        .modifier(FittedSheetSizing(displaySize: CGSize(width: 620, height: 540)))
         .onAppear { display = model.settings }
         .task { await refreshEngine() }
         .fileImporter(
@@ -201,6 +239,89 @@ struct SettingsView: View {
         }
     }
 
+    /// 開発時の確認用。既定は切ってあり、切っている間はツールバーに一切出ない。
+    private var debugSection: some View {
+        Section {
+            Toggle("デバッグモード", isOn: $display.debugMode)
+        } footer: {
+            Text("測定グリッド（本文の上に重ねる半透明のものさし）をリーダーのツールバーに出します。"
+                 + "レイアウトの余白や座標を実寸で確かめるための開発用の機能です。")
+        }
+    }
+
+    /// 対訳（LM Studio）。原文はそのまま、訳をリーダー右のペインに出す。
+    private var translationSection: some View {
+        Section {
+            TextField("LM Studio の URL", text: $translation.baseURLString)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .onSubmit { Task { await refreshLMStudio() } }
+
+            LabeledContent("接続状態") {
+                HStack(spacing: 8) {
+                    if lmProbing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Circle().fill(lmReachable ? .green : .red).frame(width: 8, height: 8)
+                        Text(lmReachable
+                             ? String(format: String(localized: "接続済み (%d モデル)"), lmModels.count)
+                             : String(localized: "未接続"))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button { Task { await refreshLMStudio() } } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(lmProbing)
+                }
+            }
+
+            if lmModels.isEmpty {
+                LabeledContent("翻訳モデル") {
+                    Text(lmReachable ? "取得できません" : "未接続").foregroundStyle(.secondary)
+                }
+            } else {
+                Picker("翻訳モデル", selection: $translation.model) {
+                    Text("自動（一覧の先頭）").tag("")
+                    ForEach(lmModels) { Text($0.id).tag($0.id) }
+                }
+            }
+
+            Picker("原文の言語", selection: $translation.sourceLanguage) {
+                Text("自動判定").tag("auto")
+                ForEach(TranslationLanguage.all, id: \.code) { Text($0.label).tag($0.code) }
+            }
+            Picker("訳文の言語", selection: $translation.targetLanguage) {
+                ForEach(TranslationLanguage.all, id: \.code) { Text($0.label).tag($0.code) }
+            }
+            Toggle("直前の段落を文脈として渡す", isOn: $translation.useContext)
+            Toggle("推論（thinking）を止めるよう頼む", isOn: $translation.disableThinking)
+            Stepper(
+                String(format: String(localized: "同時に投げる段落数: %d"), translation.concurrency),
+                value: $translation.concurrency, in: 1 ... 8)
+
+            LabeledContent("訳のキャッシュ") {
+                HStack(spacing: 8) {
+                    Text(String(format: String(localized: "%d 段落"), cachedTranslations))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("消去") {
+                        Task {
+                            await TranslationCache.shared.clear()
+                            cachedTranslations = 0
+                        }
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                }
+            }
+        } header: {
+            Text("翻訳（LM Studio）")
+        } footer: {
+            Text("LM Studio の「Local Server」を起動しておくと、リーダーの吹き出しボタンで対訳ペインを開けます。訳は段落ごとに作られ、一度訳した段落はキャッシュから即座に出ます。推論（thinking）するモデルは1段落に数十秒〜数分かかるので、対訳には推論しないモデルを選んでください。")
+        }
+    }
+
     /// ラベル + スライダー + 右端の数値表示（モックの各スライダー行）。
     private func sliderRow(
         _ title: LocalizedStringKey, value: Binding<Double>,
@@ -218,6 +339,23 @@ struct SettingsView: View {
     }
 
     // MARK: - 動作
+
+    /// LM Studio へ /v1/models を問い合わせ、接続状態とモデル一覧を更新する。
+    private func refreshLMStudio() async {
+        lmProbing = true
+        lmModels = []
+        lmReachable = false
+        if let models = await LMStudioClient.models(settings: translation) {
+            lmReachable = true
+            lmModels = models
+            // 選んでいたモデルが一覧から消えていたら「自動」に戻す（LM Studio 側の入れ替えに追従）。
+            if !translation.model.isEmpty, !models.contains(where: { $0.id == translation.model }) {
+                translation.model = ""
+            }
+        }
+        lmProbing = false
+        cachedTranslations = await TranslationCache.shared.count()
+    }
 
     /// URL へ /version と /speakers を問い合わせ、状態表示と話者一覧を更新する。
     private func refreshEngine() async {
@@ -248,6 +386,7 @@ struct SettingsView: View {
     private func saveAndApply() {
         testSpeaker.stop()
         AudioSettingsStore.save(audio)
+        TranslationSettingsStore.save(translation)
         model.updateSettings(display)
         if savePath.isEmpty { TTSSaveLocation.clear() }
         else { TTSSaveLocation.setDirectory(URL(fileURLWithPath: savePath, isDirectory: true)) }
@@ -259,6 +398,11 @@ struct SettingsView: View {
         reader?.refreshWritingModeFromSettings()
         // 綴じ方向・見開きの既定も同じく、本ごとの上書きが無い本へ反映する。
         reader?.refreshDisplayOverridesFromSettings()
+        // モデルや訳文の言語を変えたら、開いている対訳は作り直す（前のモデルの訳が混ざらないよう）。
+        if let reader, reader.showTranslation {
+            reader.translationModel = translation.model
+            reader.refreshTranslation()
+        }
         dismiss()
     }
 
@@ -273,37 +417,54 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - Mac Catalyst フォームシートの高さ制御ブリッジ
-//
-// Catalyst の .sheet は UIKit フォームシートで提示され、SwiftUI の .frame /
-// .presentationDetents では大きさを変えられない。提示中のホスト VC の
-// preferredContentSize を直接与えると、その寸法でシート枠が確定する。
-// 透明な子 VC を content の背景に忍ばせ、親をたどって提示ホスト（presentingVC を持つ VC）
-// を見つけて設定する。
-struct CatalystSheetSizer: UIViewControllerRepresentable {
-    let size: CGSize
+// MARK: - Mac Catalyst のシート寸法
 
-    func makeUIViewController(context: Context) -> UIViewController {
-        let vc = UIViewController()
-        vc.view.backgroundColor = .clear
-        vc.view.isUserInteractionEnabled = false
-        return vc
-    }
+/// 設定シートの大きさを決める。iOS 18 / macOS 15 で入った `.presentationSizing` を使う。
+///
+/// 経緯: Catalyst の `.sheet` は UIKit フォームシートで提示され、SwiftUI の `.frame` も
+/// `.presentationDetents`（iOS 用）も効かない。長らく提示ホスト VC の `preferredContentSize`
+/// を直接書く回避策を使っていたが、macOS 15 では設定してもすぐ既定値（iOS 座標 620×680
+/// ＝実寸 478×524）へ巻き戻され、行が増えるほど下が切れるようになった。
+/// `.presentationSizing` は SwiftUI 側で提示サイズを決めるためこれを迂回できる。
+struct FittedSheetSizing: ViewModifier {
+    /// 画面上の実寸（pt）で欲しいシートの大きさ。座標系の換算は内部で行う。
+    let displaySize: CGSize
 
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        let target = size
-        DispatchQueue.main.async {
-            // 提示されているシートのルート（presentingViewController を持つ最上位の親）を探す。
-            var host: UIViewController? = nil
-            var cur: UIViewController? = uiViewController
-            while let c = cur {
-                if c.presentingViewController != nil { host = c }
-                cur = c.parent
-            }
-            let vc = host ?? uiViewController.parent
-            if let vc, vc.preferredContentSize != target {
-                vc.preferredContentSize = target
-            }
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.presentationSizing(SheetDisplaySizing(displaySize: displaySize))
+        } else {
+            // iOS 18 未満（macOS 14 以前）では Catalyst 既定サイズのまま。
+            content
         }
+    }
+}
+
+/// 実寸で欲しい大きさを、Catalyst の座標系と画面の広さに合わせて提案サイズへ直す。
+///
+/// `.form` や `.fitted` は Form がスクロール可能なせいで理想サイズを小さく見積もり、
+/// シートが内容よりずっと小さくなる（実測 355×93）。そこで欲しい大きさを直接返す。
+@available(iOS 18.0, *)
+struct SheetDisplaySizing: PresentationSizing {
+    let displaySize: CGSize
+
+    /// 提案サイズは Catalyst の iOS 座標系で解釈され、画面にはこの比率で描かれる
+    ///（実測: 提案 760×840 → 実寸 586×647、いずれも ×0.7708）。
+    private static let catalystScale: CGFloat = 0.7708
+    /// 画面端との最小の空き（実寸 pt）。メニューバーとシート上下の余白ぶん。
+    private static let screenMargin = CGSize(width: 60, height: 70)
+
+    func proposedSize(
+        for root: PresentationSizingRoot, context: PresentationSizingContext
+    ) -> ProposedViewSize {
+        // PresentationSizingContext は寸法を公開しないので、画面は UIScreen から取る
+        //（Catalyst の UIScreen.bounds は実寸 pt を返す。実測 1600×900）。
+        let screen = UIScreen.main.bounds.size
+        let fits = CGSize(
+            width: min(displaySize.width, max(360, screen.width - Self.screenMargin.width)),
+            height: min(displaySize.height, max(360, screen.height - Self.screenMargin.height)))
+        return ProposedViewSize(
+            width: fits.width / Self.catalystScale,
+            height: fits.height / Self.catalystScale)
     }
 }

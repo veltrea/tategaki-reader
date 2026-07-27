@@ -105,6 +105,16 @@ struct ReadingSettings: Codable, Equatable {
     /// 全書籍の既定の見開き（画像ページ／本文）。本ごとの指定が優先される。
     var imageSpread: String = SpreadMode.auto.rawValue
     var textSpread: String = SpreadMode.auto.rawValue
+    /// 開発時の確認用の操作（測定グリッドなど）をツールバーに出すか。
+    var debugMode: Bool = false
+
+    /// 文字サイズ・行間の可動域と刻み（メニューの増減とリセットで使う）。
+    /// 文字サイズは設定シートのスライダー（0.6〜2.0）より広く、これまでの
+    /// ツールバー操作で許していた範囲をそのまま保つ。
+    static let fontSizeRange: ClosedRange<Double> = 0.5 ... 3.0
+    static let lineHeightRange: ClosedRange<Double> = 1.0 ... 2.4
+    static let fontSizeStep = 0.1
+    static let lineHeightStep = 0.1
 
     init(fontSize: Double = 1.0, lineHeight: Double = 1.8,
          theme: String = "light", language: String = "auto",
@@ -112,7 +122,8 @@ struct ReadingSettings: Codable, Equatable {
          renderMode: String = RenderMode.friendly.rawValue,
          bindingDirection: String = BindingDirection.auto.rawValue,
          imageSpread: String = SpreadMode.auto.rawValue,
-         textSpread: String = SpreadMode.auto.rawValue) {
+         textSpread: String = SpreadMode.auto.rawValue,
+         debugMode: Bool = false) {
         self.fontSize = fontSize
         self.lineHeight = lineHeight
         self.theme = theme
@@ -122,6 +133,7 @@ struct ReadingSettings: Codable, Equatable {
         self.bindingDirection = bindingDirection
         self.imageSpread = imageSpread
         self.textSpread = textSpread
+        self.debugMode = debugMode
     }
 
     // 旧バージョン（fontSize/theme のみ）の保存データも欠損キーを既定で補って読めるようにする。
@@ -141,6 +153,14 @@ struct ReadingSettings: Codable, Equatable {
             ?? SpreadMode.auto.rawValue
         textSpread = try c.decodeIfPresent(String.self, forKey: .textSpread)
             ?? SpreadMode.auto.rawValue
+        debugMode = try c.decodeIfPresent(Bool.self, forKey: .debugMode) ?? false
+    }
+}
+
+extension Comparable {
+    /// 値域へ丸める。文字サイズ・行間の増減で使う。
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        min(max(self, range.lowerBound), range.upperBound)
     }
 }
 
@@ -343,8 +363,18 @@ final class AppModel: ObservableObject {
     @Published var openedBook: BookEntry?
     /// メニュー「ファイル > 開く…」から fileImporter を出すためのフラグ。
     @Published var requestOpenPanel = false
+    /// 設定シート（オーディオ＋表示）の表示。書棚・リーダーのどちらからでも、
+    /// またメニュー「環境設定… ⌘,」からも開くので、画面ではなくアプリ側で持つ。
+    @Published var showSettings = false
+    /// 本文検索シートの表示。ツールバーの虫めがねと、メニュー「編集 > 検索…（⌘F）」の
+    /// どちらからも開くので、リーダー画面ではなくアプリ側で持つ。
+    @Published var showSearch = false
     /// 全書籍共通の読書設定（フォント・配色）。
     @Published var settings = ReadingSettings()
+    /// いま開いているリーダー。メニューバーの「表示」からは画面階層をたどれないので、
+    /// アプリ側で現在のリーダーを持っておき、メニューの操作先にする
+    ///（ReaderModel 側の model 参照は weak なので循環しない）。
+    @Published var activeReader: ReaderModel?
 
     private let defaultsKey = "library.books.v1"
     private let settingsKey = "library.settings.v1"
@@ -381,6 +411,14 @@ final class AppModel: ObservableObject {
         if let data = try? JSONEncoder().encode(newValue) {
             UserDefaults.standard.set(data, forKey: settingsKey)
         }
+    }
+
+    /// 表示設定の一部だけを書き換える（本を開いていないときのメニュー操作用）。
+    func editSettings(_ transform: (inout ReadingSettings) -> Void) {
+        var copy = settings
+        transform(&copy)
+        guard copy != settings else { return }
+        updateSettings(copy)
     }
 
     // MARK: しおり

@@ -47,7 +47,6 @@ struct ShelfView: View {
     @State private var yomiEditBook: BookEntry?
     @State private var yomiDraft = ""
     /// 設定シート（書棚からも開ける。本を開いていないので表示反映は次に本を開いたとき）。
-    @State private var showSettings = false
 
     private let columns = [GridItem(.adaptive(minimum: 130, maximum: 180), spacing: 24)]
 
@@ -154,7 +153,7 @@ struct ShelfView: View {
             }
         }
         #endif
-        .sheet(isPresented: $showSettings) {
+        .sheet(isPresented: $model.showSettings) {
             SettingsView(model: model, reader: nil)
         }
         .alert("作者の読み", isPresented: Binding(
@@ -258,7 +257,7 @@ struct ShelfView: View {
                 Text("書棚")
                     .font(.title2.bold())
                 Spacer()
-                Button { showSettings = true } label: {
+                Button { model.showSettings = true } label: {
                     Image(systemName: "gearshape")
                 }
                 .help("設定")

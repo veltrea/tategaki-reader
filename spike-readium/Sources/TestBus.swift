@@ -164,6 +164,27 @@ final class TestBus {
             let js = (cmd["js"] as? String) ?? ""
             let out = await reader.evalJS(js)
             return ["ok": true, "result": out]
+        case "bookmarkSelection":
+            // 本文の右クリック「しおりを追加」と同じ経路。選択は eval で作っておく
+            //（右クリックメニュー自体は合成イベントで開けないため、経路だけを検証する）。
+            guard let reader else { return ["ok": false, "error": "reader not attached (open a book first)"] }
+            reader.addBookmarkAtSelection()
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            let list = model?.bookmarks(for: reader.bookID ?? UUID()) ?? []
+            return [
+                "ok": true,
+                "count": list.count,
+                "last": list.last.map { ["cfi": $0.locatorJSON, "excerpt": $0.excerpt] } ?? NSNull(),
+            ]
+        case "bookmarkList":
+            guard let reader, let id = reader.bookID else {
+                return ["ok": false, "error": "reader not attached (open a book first)"]
+            }
+            let list = model?.bookmarks(for: id) ?? []
+            return [
+                "ok": true, "count": list.count,
+                "items": list.map { ["cfi": $0.locatorJSON, "excerpt": $0.excerpt, "progression": $0.progression] },
+            ]
         case "seek":
             guard let reader else { return ["ok": false, "error": "reader not attached (open a book first)"] }
             let f = (cmd["fraction"] as? NSNumber)?.doubleValue ?? 0
@@ -188,6 +209,62 @@ final class TestBus {
                 "bookRTL": reader.bookIsRTL,
                 "fraction": reader.progression,
             ]
+        case "translateOn", "translateOff", "translateRefresh":
+            // 対訳ペイン（LM Studio）の開閉と訳し直し。翻訳は非同期に進むので、
+            // 結果の確認は translateState をポーリングする。
+            guard let reader else { return ["ok": false, "error": "reader not attached (open a book first)"] }
+            if name == "translateRefresh" {
+                reader.refreshTranslation(force: (cmd["force"] as? Bool) ?? false)
+            } else {
+                let want = name == "translateOn"
+                if reader.showTranslation != want { reader.toggleTranslation() }
+            }
+            return ["ok": true, "showTranslation": reader.showTranslation]
+        case "translateState":
+            guard let reader else { return ["ok": false, "error": "reader not attached (open a book first)"] }
+            let units: [[String: Any]] = reader.translationUnits.map { u in
+                var state = "pending"
+                var error: Any = NSNull()
+                switch u.state {
+                case .pending: state = "pending"
+                case .running: state = "running"
+                case .done:    state = "done"
+                case let .failed(m): state = "failed"; error = m
+                }
+                return [
+                    "id": u.id, "heading": u.isHeading, "state": state,
+                    "source": u.source, "translated": u.translated, "error": error,
+                ]
+            }
+            return [
+                "ok": true,
+                "showTranslation": reader.showTranslation,
+                "isTranslating": reader.isTranslating,
+                "model": reader.translationModel,
+                "error": reader.translationError ?? NSNull(),
+                "count": units.count,
+                "done": reader.translationUnits.filter(\.isSettled).count,
+                "units": units,
+            ]
+        case "setTranslation":
+            // 翻訳設定の書き換え（テストから接続先・モデル・訳先言語を差し替える）。
+            var s = TranslationSettingsStore.load()
+            if let v = cmd["url"] as? String { s.baseURLString = v }
+            if let v = cmd["model"] as? String { s.model = v }
+            if let v = cmd["target"] as? String { s.targetLanguage = v }
+            if let v = cmd["source"] as? String { s.sourceLanguage = v }
+            if let v = cmd["context"] as? Bool { s.useContext = v }
+            if let v = cmd["thinking"] as? Bool { s.disableThinking = !v }
+            if let v = (cmd["concurrency"] as? NSNumber)?.intValue { s.concurrency = v }
+            TranslationSettingsStore.save(s)
+            reader?.translationModel = s.model
+            return ["ok": true, "url": s.baseURLString, "model": s.model,
+                    "target": s.targetLanguage, "concurrency": s.concurrency]
+        case "translatePassages":
+            // 翻訳せず、bridge が抽出した「いま見えている段落」だけを返す（抽出の検証用）。
+            guard let reader else { return ["ok": false, "error": "reader not attached (open a book first)"] }
+            let raw = await reader.engine.callJSON("window.__reader.getVisiblePassages()")
+            return ["ok": true, "passages": raw ?? NSNull()]
         case "display":
             // 表示の強制（綴じ方向・見開き・アスペクト比）の取得と変更。
             // 例: {"cmd":"display","binding":"rtl"} / {"cmd":"display","aspect":"844:1200"}
@@ -392,9 +469,9 @@ final class TestBus {
             else { TTSSaveLocation.setDirectory(URL(fileURLWithPath: dir, isDirectory: true)) }
             return ["ok": true, "dir": TTSSaveLocation.resolveDirectory().path]
         case "openSettings":
-            // 設定シートを開く（視覚確認・AX 操作用）。
-            guard let reader else { return ["ok": false, "error": "reader not attached (open a book first)"] }
-            reader.showSettings = true
+            // 設定シートを開く（視覚確認・AX 操作用）。書棚でも開けるので model 側で持つ。
+            guard let model else { return ["ok": false, "error": "model not attached"] }
+            model.showSettings = true
             return ["ok": true]
         case "saveSection":
             // 現在セクションを音声保存し、書き出した WAV の実パスを返す（完了まで待つ）。
@@ -425,6 +502,54 @@ final class TestBus {
 
         case "state":
             return ["ok": true, "books": model.books.map { dump($0) }]
+
+        case "menuDump":
+            // メニュー識別子の実物（AppDelegate.buildMenu が組んだ直後の姿）。
+            return ["ok": true, "items": AppDelegate.menuDump]
+
+        case "closeBook":
+            // 書棚へ戻す（メニュー項目の淡色表示など、本を開いていない状態の検証用）。
+            model.closeBook()
+            return ["ok": true, "opened": model.openedBook?.title ?? NSNull()]
+
+        case "openPanel":
+            // メニュー「ファイル > 開く…」と同じ経路でファイルパネルを出す。
+            model.requestOpenPanel = true
+            return ["ok": true]
+
+        case "displayState":
+            // 表示まわりの現在値。全書籍の既定と、開いている本に実際に効いている値を並べて返す
+            //（メニュー「表示」が既定と本ごとの指定のどちらを書き換えたかを機械検証するため）。
+            let s = model.settings
+            var out: [String: Any] = [
+                "ok": true,
+                "settings": [
+                    "fontSize": s.fontSize, "lineHeight": s.lineHeight, "theme": s.theme,
+                    "renderMode": s.renderMode, "writingMode": s.writingMode,
+                    "bindingDirection": s.bindingDirection,
+                    "imageSpread": s.imageSpread, "textSpread": s.textSpread,
+                    "debugMode": s.debugMode,
+                ],
+            ]
+            if let reader = model.activeReader {
+                out["reader"] = [
+                    "renderMode": reader.renderMode.rawValue,
+                    "writingMode": reader.writingMode.rawValue,
+                    "bindingDirection": reader.bindingDirection.rawValue,
+                    "imageSpread": reader.imageSpread.rawValue,
+                    "textSpread": reader.textSpread.rawValue,
+                ]
+            }
+            if let book = model.openedBook.flatMap({ b in model.books.first { $0.id == b.id } }) {
+                // 本ごとの上書き（nil = 既定に追従）。
+                out["bookOverrides"] = [
+                    "writingMode": book.writingMode as Any? ?? NSNull(),
+                    "bindingDirection": book.bindingDirection as Any? ?? NSNull(),
+                    "imageSpread": book.imageSpread as Any? ?? NSNull(),
+                    "textSpread": book.textSpread as Any? ?? NSNull(),
+                ]
+            }
+            return out
 
         case "setYomi", "clearYomi":
             guard let b = match(cmd, model.books) else { return ["ok": false, "error": "book not found"] }

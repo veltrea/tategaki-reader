@@ -12,8 +12,8 @@ struct ReaderScreen: View {
     @StateObject private var reader = ReaderModel()
     @State private var sliderValue: Double = 0
     @State private var isEditingSlider = false
-    @State private var showBookmarks = false
-    @State private var showSearch = false
+    // 検索シートの表示。メニュー「編集 > 検索…（⌘F）」からも開くので、
+    // 設定シートと同じくアプリ側（AppModel）で持つ。
     /// デバッグ用: ネイティブ層の測定グリッド（半透明メジャー）を表示するか。
     @AppStorage("reader.debug.measureGrid") private var showMeasureGrid = false
     /// ユーザー定義カスタムCSS（全書籍共通・本のCSSより後に注入して上書き）。
@@ -21,19 +21,18 @@ struct ReaderScreen: View {
     @State private var showCSSEditor = false
     /// 読み上げ音声の保存先フォルダ選択ピッカーの表示。
     @State private var showSaveFolderPicker = false
-    /// 強制アスペクト比の手入力（"844:1200" 形式）。
-    @State private var showAspectInput = false
-    @State private var aspectDraft = ""
+    /// 対訳ペインの幅（左端のハンドルをドラッグして変える）。
+    @AppStorage("reader.translation.paneWidth") private var translationPaneWidth: Double = 460
 
     var body: some View {
         HStack(spacing: 0) {
-            if showBookmarks {
+            if reader.showBookmarks {
                 BookmarksSidebar(
                     model: model,
                     bookID: book.id,
                     onAdd: { reader.addBookmark() },
                     onJump: { reader.jump(to: $0) },
-                    onClose: { showBookmarks = false }
+                    onClose: { reader.showBookmarks = false }
                 )
                 .frame(width: 260)
                 .transition(.move(edge: .leading))
@@ -66,6 +65,8 @@ struct ReaderScreen: View {
                             reader.updateContentPointer(y: point?.y, viewHeight: height)
                         },
                         onShortcut: { reader.handleShortcut($0) },
+                        onFind: { model.showSearch = true },
+                        onAddBookmark: { reader.addBookmarkAtSelection() },
                         columnPitch: reader.columnPitch,
                         pageBackground: ReaderModel.pageBackgroundColor(theme: model.settings.theme)
                     )
@@ -90,6 +91,8 @@ struct ReaderScreen: View {
         }
         .task {
             reader.bind(model: model, bookID: book.id)
+            // メニューバーの「表示」の操作先。書棚へ戻ると onDisappear で外す。
+            model.activeReader = reader
             #if DEBUG
             // DEBUG 限定: 計りレイヤー/測定を TestBus から駆動できるよう現在のリーダーを登録。
             TestBus.shared.reader = reader
@@ -104,8 +107,17 @@ struct ReaderScreen: View {
                 sliderValue = newValue.isFinite ? min(max(newValue, 0), 1) : 0
             }
         }
-        .onDisappear { reader.persistProgress() }
-        .sheet(isPresented: $showSearch) {
+        // デバッグモードを切ったら、出したままの測定グリッドも畳む（消す手段が無くなるため）。
+        .onChange(of: model.settings.debugMode) { enabled in
+            if !enabled { showMeasureGrid = false }
+        }
+        .onDisappear {
+            reader.persistProgress()
+            // 本を差し替えたときは新しい画面の .task が先に走ることがあるので、
+            // 自分が登録した参照のときだけ外す。
+            if model.activeReader === reader { model.activeReader = nil }
+        }
+        .sheet(isPresented: $model.showSearch) {
             SearchView(reader: reader) { locator in
                 reader.jumpToSearchResult(locator)
             }
@@ -126,14 +138,14 @@ struct ReaderScreen: View {
         .sheet(isPresented: $reader.showDictionary) {
             DictionarySheet(reader: reader)
         }
-        .sheet(isPresented: $reader.showSettings) {
+        .sheet(isPresented: $model.showSettings) {
             SettingsView(model: model, reader: reader)
         }
         // 強制アスペクト比の手入力。判型が拾えない本や、拾えた値が実際と違う本のため。
-        .alert("画像の比率を固定", isPresented: $showAspectInput) {
-            TextField("例: 844:1200", text: $aspectDraft)
+        .alert("画像の比率を固定", isPresented: $reader.showAspectInput) {
+            TextField("例: 844:1200", text: $reader.aspectDraft)
             Button("固定する") {
-                if let a = AspectRatio(storageString: aspectDraft) { reader.setForcedAspect(a) }
+                if let a = AspectRatio(storageString: reader.aspectDraft) { reader.setForcedAspect(a) }
             }
             Button("固定しない", role: .destructive) { reader.setForcedAspect(nil) }
             Button("キャンセル", role: .cancel) { }
@@ -163,9 +175,23 @@ struct ReaderScreen: View {
                     }
             }
         }
+            // 対訳ペインは本文の右。本文（原書）が左に残るので「左＝原文／右＝訳」になる。
+            if reader.showTranslation {
+                TranslationPane(
+                    model: model,
+                    reader: reader,
+                    width: Binding(
+                        get: { CGFloat(translationPaneWidth) },
+                        set: { translationPaneWidth = Double($0) }
+                    )
+                )
+                .frame(width: CGFloat(translationPaneWidth))
+                .transition(.move(edge: .trailing))
+            }
         }
-        .animation(.easeInOut(duration: 0.2), value: showBookmarks)
+        .animation(.easeInOut(duration: 0.2), value: reader.showBookmarks)
         .animation(.easeInOut(duration: 0.2), value: reader.showTOC)
+        .animation(.easeInOut(duration: 0.2), value: reader.showTranslation)
     }
 
     // MARK: - 操作パネル層（Kindle 風・ホバーでのみ出す）
@@ -258,6 +284,16 @@ struct ReaderScreen: View {
             } label: {
                 Label("書棚", systemImage: "chevron.left")
             }
+            // 目次は Kindle と同じく「書棚へ戻る」のすぐ右。右端のアイコン群に混ぜると
+            // しおり一覧と絵柄が近く、どちらがどちらか読めなくなるため離してある。
+            Button {
+                reader.toggleTOC()
+            } label: {
+                // 開いている間はサイドバーの絵に変える（元はしおり一覧ボタンの絵柄）。
+                Image(systemName: reader.showTOC ? "sidebar.left" : "list.bullet")
+            }
+            .imageScale(.large)
+            .help("目次")
             Spacer()
             Text(book.title)
                 .font(.subheadline)
@@ -271,21 +307,9 @@ struct ReaderScreen: View {
 
     private var readerControls: some View {
         HStack(spacing: 18) {
-            // EPUB の指定を確かめる用。押すたびに「読みやすさ優先」⇄「EPUB のまま」を往復する。
-            Button { reader.toggleRenderMode() } label: {
-                Image(systemName: reader.renderMode == .raw
-                    ? "chevron.left.forwardslash.chevron.right" : "wand.and.sparkles")
-            }
-            .help(reader.renderMode == .raw
-                ? "EPUB のまま表示中（押すと読みやすさ優先へ）"
-                : "読みやすさ優先で表示中（押すと EPUB のままへ）")
-            // 表示の強制（綴じ方向・見開き・比率）。どれも本のデータからは正しく決められない
-            // ものなので、押せばすぐ変わり、長押しで明示的に選べる形にしてある。
-            // 値は本ごとに覚えるので、次に開いたときも同じ見え方になる。
-            bindingButton
-            imageSpreadButton
-            textSpreadButton
-            aspectButton
+            // 表示の強制（表示モード・綴じ方向・見開き・比率）は、絵柄の似たアイコンが
+            // 6 つ並んで何がどれだか読めなくなっていたので、メニューバーの「表示」へ寄せた。
+            // ここに残すのは「押して確かめる」を繰り返す見開きずらしだけ。
             // 固定レイアウトに限らず、画像ページを見開きで組んでいる本でも使う。
             if reader.isFixedLayout || reader.currentPageIsImage {
                 Button { reader.toggleSpreadOffset() } label: {
@@ -293,26 +317,16 @@ struct ReaderScreen: View {
                 }
                 .help("見開きをずらす")
             }
-            Button { showSearch = true } label: {
+            Button { model.showSearch = true } label: {
                 Image(systemName: "magnifyingglass")
             }
             .help("本文を検索")
-            Button { reader.showDictionary = true } label: {
-                Image(systemName: "character.book.closed")
-            }
-            .help("読み上げ辞書（単語・読み替えルール）")
+            // 読み上げ辞書はメニューバーの「読み上げ > 読み上げ辞書…」から開く。
             Button { reader.addBookmark() } label: {
                 Image(systemName: "bookmark")
             }
             .help("しおりを追加")
-            Button { showBookmarks.toggle(); if showBookmarks { reader.showTOC = false } } label: {
-                Image(systemName: showBookmarks ? "sidebar.left" : "list.bullet")
-            }
-            .help("しおり一覧")
-            Button { reader.showTOC.toggle(); if reader.showTOC { showBookmarks = false } } label: {
-                Image(systemName: "list.bullet.indent")
-            }
-            .help("目次")
+            // しおり一覧はメニューバーの「移動 > しおりを開く」から開く。
             // 書字方向。EPUB の指定は当てにならないので、読み手が本ごとに上書きできる。
             Menu {
                 Picker("書字方向", selection: Binding(
@@ -360,135 +374,16 @@ struct ReaderScreen: View {
                 Image(systemName: "textformat.size")
             }
             .help("文字サイズ・配色")
-            Button { reader.showSettings = true } label: {
-                Image(systemName: "gearshape")
+            // 環境設定はアプリメニュー（⌘,）から開く。ツールバーには置かない。
+            // 測定グリッドは環境設定の「デバッグモード」を入れている間だけ出す。
+            if model.settings.debugMode {
+                Button { showMeasureGrid.toggle() } label: {
+                    Image(systemName: showMeasureGrid ? "ruler.fill" : "ruler")
+                }
+                .help("測定グリッド（デバッグ）")
             }
-            .help("設定")
-            Button { showMeasureGrid.toggle() } label: {
-                Image(systemName: showMeasureGrid ? "ruler.fill" : "ruler")
-            }
-            .help("測定グリッド（デバッグ）")
         }
         .imageScale(.large)
-    }
-
-    // MARK: 表示の強制（ワンタッチ切替）
-    //
-    // どのボタンも「押す＝次の値へ巡回」「長押し＝一覧から選ぶ」。Menu の primaryAction は
-    // タップを奪ってメニューを開かせないので、この二段構えが1つのボタンで成立する。
-
-    /// 綴じ方向（自動 → 右綴じ → 左綴じ → 自動）。
-    private var bindingButton: some View {
-        Menu {
-            Picker("綴じ方向", selection: Binding(
-                get: { reader.bindingDirection },
-                set: { reader.setBindingDirection($0) }
-            )) {
-                ForEach(BindingDirection.allCases) { d in
-                    Label(d.label, systemImage: d.symbolName).tag(d)
-                }
-            }
-            .pickerStyle(.inline)
-        } label: {
-            Image(systemName: reader.bindingDirection.symbolName)
-        } primaryAction: {
-            reader.setBindingDirection(reader.bindingDirection.next)
-        }
-        .help(bindingHelp)
-    }
-
-    /// 自動のときは「いま何と判定されているか」まで出す（自動が当たっているか一目で分かる）。
-    private var bindingHelp: String {
-        let resolved = reader.bookIsRTL
-            ? String(localized: "右綴じ") : String(localized: "左綴じ")
-        return reader.bindingDirection == .auto
-            ? String(format: String(localized: "綴じ方向: 自動（いまは%@）"), resolved)
-            : String(format: String(localized: "綴じ方向: %@（固定）"), reader.bindingDirection.label)
-    }
-
-    /// 画像ページの見開き（自動 → 常に見開き → 常に単ページ → 自動）。
-    private var imageSpreadButton: some View {
-        Menu {
-            Picker("画像の見開き", selection: Binding(
-                get: { reader.imageSpread },
-                set: { reader.setImageSpread($0) }
-            )) {
-                ForEach(SpreadMode.allCases) { m in
-                    Label(m.label, systemImage: m.symbolName(forImages: true)).tag(m)
-                }
-            }
-            .pickerStyle(.inline)
-        } label: {
-            Image(systemName: reader.imageSpread.symbolName(forImages: true))
-        } primaryAction: {
-            reader.setImageSpread(reader.imageSpread.next)
-        }
-        .help(String(format: String(localized: "画像ページの見開き: %@"), reader.imageSpread.label))
-    }
-
-    /// 本文の見開き（自動 → 常に見開き → 常に単ページ → 自動）。
-    private var textSpreadButton: some View {
-        Menu {
-            Picker("本文の見開き", selection: Binding(
-                get: { reader.textSpread },
-                set: { reader.setTextSpread($0) }
-            )) {
-                ForEach(SpreadMode.allCases) { m in
-                    Label(m.label, systemImage: m.symbolName(forImages: false)).tag(m)
-                }
-            }
-            .pickerStyle(.inline)
-        } label: {
-            Image(systemName: reader.textSpread.symbolName(forImages: false))
-        } primaryAction: {
-            reader.setTextSpread(reader.textSpread.next)
-        }
-        .help(String(format: String(localized: "本文の見開き: %@"), reader.textSpread.label))
-    }
-
-    /// アスペクト比の強制。押すと「本の判型で固定」⇄「解除」。長押しで判型を選ぶ。
-    /// 本から判型を拾えなかったときは、押しても何も起きないので既定値を先頭に出す。
-    private var aspectButton: some View {
-        Menu {
-            Button {
-                reader.setForcedAspect(nil)
-            } label: {
-                Label("固定しない", systemImage: "aspectratio")
-            }
-            if let detected = reader.detectedAspect {
-                Section("この本の判型") {
-                    Button {
-                        reader.setForcedAspect(detected)
-                    } label: {
-                        Label(detected.label, systemImage: "sparkle.magnifyingglass")
-                    }
-                }
-            }
-            Section("判型を選ぶ") {
-                ForEach(AspectRatio.presets, id: \.storageString) { preset in
-                    Button(preset.label) { reader.setForcedAspect(preset) }
-                }
-            }
-            Section {
-                Button {
-                    aspectDraft = (reader.forcedAspect ?? reader.detectedAspect)?.storageString ?? ""
-                    showAspectInput = true
-                } label: {
-                    Label("任意の比率…", systemImage: "square.and.pencil")
-                }
-            }
-        } label: {
-            Image(systemName: reader.forcedAspect == nil ? "aspectratio" : "aspectratio.fill")
-        } primaryAction: {
-            // 押したときは「本の判型で固定」と「解除」を往復する。判型が拾えていない本では
-            // 往復させようがないので、メニューから選んでもらう。
-            if reader.forcedAspect != nil { reader.setForcedAspect(nil) }
-            else if let detected = reader.detectedAspect { reader.setForcedAspect(detected) }
-            else { showAspectInput = true }
-        }
-        .help(reader.forcedAspect.map {
-            String(format: String(localized: "比率を %@ に固定中"), $0.label)
-        } ?? String(localized: "画像の比率を固定する（引き伸ばし）"))
     }
 
     private var ttsControls: some View {
@@ -603,6 +498,11 @@ final class DictionaryHostViewController: UIViewController {
     /// 読み上げのキー操作（"playPause" / "stop"）。本文にフォーカスが無くても効くように、
     /// bridge.js の keydown だけでなくレスポンダチェーンからも拾う。
     var onShortcut: ((String) -> Void)?
+    /// メニュー「編集 > 検索…（⌘F）」。本文を表示しているこのビューがレスポンダチェーンに
+    /// いる間だけ有効になる＝書棚では自動的に淡色表示になる。
+    var onFind: (() -> Void)?
+    /// 本文の右クリックメニュー「しおりを追加」（選択範囲の位置に挟む）。
+    var onAddBookmark: (() -> Void)?
     /// ポインタのホバー位置（このビューの座標系）とビュー高さ。操作パネルの自動表示に使う。
     /// 位置 nil はホバー終了。
     var onHover: ((CGPoint?, CGFloat) -> Void)?
@@ -782,9 +682,23 @@ final class DictionaryHostViewController: UIViewController {
         onRegister?(selectionText?() ?? "")
     }
 
+    /// 「編集 > 検索…」の実行先（メニューの組み立ては AppDelegate.buildMenu）。
+    @objc func findInBook(_ sender: Any?) {
+        onFind?()
+    }
+
+    /// 右クリックメニューの「しおりを追加」。
+    @objc func addBookmarkAtSelection(_ sender: Any?) {
+        onAddBookmark?()
+    }
+
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         if action == #selector(registerReadingDictionary(_:)) {
             return !(selectionText?() ?? "").isEmpty
+        }
+        if action == #selector(findInBook(_:)) { return onFind != nil }
+        if action == #selector(addBookmarkAtSelection(_:)) {
+            return onAddBookmark != nil && !(selectionText?() ?? "").isEmpty
         }
         return super.canPerformAction(action, withSender: sender)
     }
@@ -796,8 +710,12 @@ final class DictionaryHostViewController: UIViewController {
             title: String(localized: "読み上げ辞書に登録"),
             action: #selector(registerReadingDictionary(_:))
         )
+        let bookmark = UICommand(
+            title: String(localized: "しおりを追加"),
+            action: #selector(addBookmarkAtSelection(_:))
+        )
         builder.insertChild(
-            UIMenu(title: "", options: .displayInline, children: [register]),
+            UIMenu(title: "", options: .displayInline, children: [bookmark, register]),
             atStartOfMenu: .root
         )
     }
@@ -1045,6 +963,10 @@ private struct NavigatorContainer: UIViewControllerRepresentable {
     var onHover: (CGPoint?, CGFloat) -> Void = { _, _ in }
     /// 読み上げのキー操作（"playPause" / "stop"）。
     var onShortcut: (String) -> Void = { _ in }
+    /// メニュー「編集 > 検索…（⌘F）」。
+    var onFind: () -> Void = { }
+    /// 右クリックメニュー「しおりを追加」。
+    var onAddBookmark: () -> Void = { }
     /// 旧 Readium 用の列ピッチ。foliate は正規ページネーションのため未使用（常に0）。
     var columnPitch: CGFloat = 0
     /// テーマの地色。reader（bind 前は nil の model 経由）ではなくビューから直接受け取る。
@@ -1060,6 +982,8 @@ private struct NavigatorContainer: UIViewControllerRepresentable {
         host.onDropEPUB = onDropEPUB
         host.onPageSide = onPageSide
         host.onShortcut = onShortcut
+        host.onFind = onFind
+        host.onAddBookmark = onAddBookmark
         host.onHover = onHover
         host.setColumnPitch(columnPitch, isImagePage: isImagePage)
         host.setMeasurementGrid(showMeasureGrid)
@@ -1070,6 +994,8 @@ private struct NavigatorContainer: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: DictionaryHostViewController, context: Context) {
         vc.onPageSide = onPageSide
         vc.onShortcut = onShortcut
+        vc.onFind = onFind
+        vc.onAddBookmark = onAddBookmark
         vc.onHover = onHover
         vc.setColumnPitch(columnPitch, isImagePage: isImagePage)
         vc.setMeasurementGrid(showMeasureGrid)
@@ -1158,15 +1084,22 @@ final class ReaderModel: NSObject, ObservableObject {
     @Published var forcedAspect: AspectRatio?
     /// この本から拾えたアスペクト比（メニューの「本の判型」に出す既定値）。
     @Published var detectedAspect: AspectRatio?
+    /// 「任意の比率…」の手入力アラートの表示。メニューバーの「表示」からも開くので、
+    /// リーダー画面の @State ではなくモデルが持つ。
+    @Published var showAspectInput = false
+    /// 手入力の下書き（"844:1200" 形式）。
+    @Published var aspectDraft = ""
     /// 表示モード。既定は読みやすさ優先の friendly。raw は EPUB の指定を確かめる用。
     @Published var renderMode: RenderMode = .friendly
     /// この本の OPF が主張する書字方向（"vertical"/"horizontal"/nil）。自動時の表示補足用。
     @Published var bookWritingHint: String?
     /// 目次（nav.xhtml / NCX のどちらでも同じ形）。
     @Published var toc: [TOCEntry] = []
-    /// 目次サイドバーの表示。しおり側と違いモデルが持つのは、AX の出ない
-    /// 状態遷移を TestBus から機械検証できるようにするため。
+    /// 目次サイドバーの表示。AX に出ない状態遷移を TestBus から機械検証できるよう、
+    /// またメニューバーの「移動」から開けるようにモデルが持つ。
     @Published var showTOC = false
+    /// しおり一覧サイドバーの表示。目次と同じ理由でモデルが持つ。
+    @Published var showBookmarks = false
     /// いま読んでいる章の href（目次サイドバーの現在位置表示用）。
     @Published var currentTocHref: String = ""
     /// 固定レイアウト（写真集・漫画など）。見開き・ずらし機能を出すため。
@@ -1179,8 +1112,6 @@ final class ReaderModel: NSObject, ObservableObject {
     @Published var dictInput: ReadingEntry?
     /// 統合辞書シートの表示（モデル所有＝登録フォームとの提示競合を requestDictionaryRegister で解決するため）。
     @Published var showDictionary = false
-    /// 設定シート（オーディオ＋表示）の表示。
-    @Published var showSettings = false
     /// 本文の現在選択テキスト（bridge の selectionchange 通知で同期）。
     /// 右クリックメニューの出し分けは同期判定が要るため、都度の JS 往復でなくこれを読む。
     var selectedText: String = ""
@@ -1197,6 +1128,21 @@ final class ReaderModel: NSObject, ObservableObject {
     /// 検索結果。
     @Published var searchResults: [SearchHit] = []
     @Published var isSearching = false
+
+    // MARK: 対訳ペイン（LM Studio）
+    // 本文はそのまま（左）、訳は SwiftUI 側のペイン（右）に出す。foliate の列レイアウトへ
+    // 訳文を割り込ませると、画像ページ・見開き・縦書きの組みと衝突して破綻するため。
+
+    /// 対訳ペインを開いているか。
+    @Published var showTranslation = false
+    /// 現在ページぶんの対訳行。
+    @Published var translationUnits: [TranslationUnit] = []
+    /// 翻訳中（1件でも走っている）か。
+    @Published var isTranslating = false
+    /// ページ全体に関わるエラー（未接続・モデル未選択など）。行ごとの失敗は各 unit が持つ。
+    @Published var translationError: String?
+    /// 実際に使ったモデル id（ペインのヘッダ表示用）。
+    @Published var translationModel: String = ""
 
     // MARK: 操作パネルの自動表示（Kindle 風）
     // 本文を常に全面に使い、上下バーはポインタが端に寄ったときだけ重ねて出す。
@@ -1239,11 +1185,14 @@ final class ReaderModel: NSObject, ObservableObject {
     private var saveTask: Task<Void, Never>?
     /// セクション動画保存の実行タスク（キャンセル用）。
     private var videoTask: Task<Void, Never>?
+    /// 対訳の取得・翻訳タスク（ページ送りのたびに張り替える）。
+    var translateTask: Task<Void, Never>?
     /// 保存ファイル名に使う本のタイトル。
     private var bookTitle: String = ""
 
     private weak var model: AppModel?
-    private var bookID: UUID?
+    /// 開いている本の ID（TestBus からのしおり検証でも読む）。
+    private(set) var bookID: UUID?
     /// 最後に relocate で受けた CFI（位置保存・しおり用）。
     private var latestCFI: String?
     /// 開いたときに復元する CFI。
@@ -1358,6 +1307,8 @@ final class ReaderModel: NSObject, ObservableObject {
             currentPageIsImage = (body["isImagePage"] as? Bool) ?? false
             currentTocHref = (body["tocHref"] as? String) ?? currentTocHref
             persistProgress()
+            // 対訳ペインを開いている間は、ページが変わるたびに訳を取り直す。
+            if showTranslation { scheduleTranslationRefresh() }
         case "dblclick":
             // 本文のダブルクリック → その語の位置から読み上げ開始。
             startSpeakingFromSelection()
@@ -1461,6 +1412,12 @@ final class ReaderModel: NSObject, ObservableObject {
         status = String(format: String(localized: "本文の見開き: %@"), mode.label)
     }
 
+    /// 現在の比率を下書きに入れて手入力アラートを開く。
+    func requestAspectInput() {
+        aspectDraft = (forcedAspect ?? detectedAspect)?.storageString ?? ""
+        showAspectInput = true
+    }
+
     /// 強制アスペクト比を変える（nil で強制解除）。本ごとに記憶する。
     func setForcedAspect(_ aspect: AspectRatio?) {
         forcedAspect = aspect
@@ -1527,6 +1484,20 @@ final class ReaderModel: NSObject, ObservableObject {
         }
     }
 
+    // MARK: サイドバー（目次・しおり）
+
+    /// 目次の開閉。しおりとは排他にする（左に2枚並べると本文が潰れる）。
+    func toggleTOC() {
+        showTOC.toggle()
+        if showTOC { showBookmarks = false }
+    }
+
+    /// しおり一覧の開閉。目次とは排他。
+    func toggleBookmarks() {
+        showBookmarks.toggle()
+        if showBookmarks { showTOC = false }
+    }
+
     // MARK: 目次
 
     /// 目次を JS から取り込む。本を開き直すたびに呼ばれる（内容は変わらないが作り直しても安い）。
@@ -1568,13 +1539,19 @@ final class ReaderModel: NSObject, ObservableObject {
 
     /// ツールバーからの往復切り替え。設定にも残して、設定画面の表示と食い違わないようにする。
     func toggleRenderMode() {
-        renderMode = (renderMode == .friendly) ? .raw : .friendly
+        setRenderMode(renderMode == .friendly ? .raw : .friendly)
+    }
+
+    /// 表示モードを直接指定する（メニューから選ぶ用）。往復切り替えと同じく設定にも残す。
+    func setRenderMode(_ mode: RenderMode) {
+        guard renderMode != mode else { return }
+        renderMode = mode
         pushRenderMode()
         if var s = model?.settings {
-            s.renderMode = renderMode.rawValue
+            s.renderMode = mode.rawValue
             model?.updateSettings(s)
         }
-        status = renderMode == .raw
+        status = mode == .raw
             ? String(localized: "EPUB のまま表示")
             : String(localized: "読みやすさ優先で表示")
     }
@@ -1877,8 +1854,10 @@ final class ReaderModel: NSObject, ObservableObject {
             lines: rendLines,
             theme: model?.settings.theme ?? "dark",
             vertical: forceVertical ?? isVertical)
+        // レンダラはメインアクタ外で走る（書き出し中に UI が固まらないようにするため）。
+        // status は MainActor のプロパティなので、進捗はここで明示的に載せ替える。
         let result = await VideoNarrationRenderer.render(config: config) { [weak self] msg in
-            self?.status = msg
+            Task { @MainActor in self?.status = msg }
         }
         guard let result, Task.isCancelled == false else {
             if Task.isCancelled { status = String(localized: "保存を中止しました") }
@@ -1919,8 +1898,24 @@ final class ReaderModel: NSObject, ObservableObject {
     // MARK: - フォントサイズ・配色
 
     func changeFontSize(by delta: Double) {
-        let size = min(max((model?.settings.fontSize ?? 1.0) + delta, 0.5), 3.0)
+        setFontSize((model?.settings.fontSize ?? 1.0) + delta)
+    }
+
+    /// 文字サイズを直接指定する（メニューの「標準に戻す」用）。可動域へ丸めて保存する。
+    func setFontSize(_ value: Double) {
+        let size = value.clamped(to: ReadingSettings.fontSizeRange)
         if var s = model?.settings { s.fontSize = size; model?.updateSettings(s) }
+        pushStyle()
+    }
+
+    func changeLineHeight(by delta: Double) {
+        setLineHeight((model?.settings.lineHeight ?? 1.8) + delta)
+    }
+
+    /// 行間を直接指定する。文字サイズと同じく全書籍共通の設定。
+    func setLineHeight(_ value: Double) {
+        let height = value.clamped(to: ReadingSettings.lineHeightRange)
+        if var s = model?.settings { s.lineHeight = height; model?.updateSettings(s) }
         pushStyle()
     }
 
@@ -1951,16 +1946,38 @@ final class ReaderModel: NSObject, ObservableObject {
 
     // MARK: - しおり
 
-    func addBookmark() {
-        guard let bookID, let cfi = latestCFI, !cfi.isEmpty else { return }
+    func addBookmark() { addBookmark(cfi: nil, excerpt: "") }
+
+    /// しおりを挟む。cfi を渡すとその位置へ、渡さなければ現在位置へ。
+    /// excerpt は一覧の行に出る（空なら「（本文位置）」表示になる）。
+    private func addBookmark(cfi: String?, excerpt: String) {
+        guard let bookID else { return }
+        let target = (cfi?.isEmpty == false) ? cfi! : (latestCFI ?? "")
+        guard !target.isEmpty else { return }
         let bm = Bookmark(
             id: UUID(),
-            locatorJSON: cfi,          // CFI を格納（新方式）
+            locatorJSON: target,       // CFI を格納（新方式）
             progression: progression,
-            excerpt: "",               // foliate 版は抜粋なし（行は「（本文位置）」表示になる）
+            excerpt: excerpt,
             createdAt: Date()
         )
         model?.addBookmark(bookID: bookID, bookmark: bm)
+    }
+
+    /// 選択中の文にしおりを挟む（本文の右クリックメニューから）。
+    /// 選択の CFI が作れない本では現在位置へ退避する。選択文は一覧の行に出す。
+    func addBookmarkAtSelection() {
+        guard engineReady else { return }
+        Task {
+            let raw = await engine.callJSON("window.__reader.getSelectionCFI()")
+            let body = raw as? [String: Any]
+            let cfi = body?["cfi"] as? String
+            let text = (body?["text"] as? String) ?? ""
+            // 一覧の行は1行表示なので、長い選択は頭だけ残す。
+            let excerpt = text.count > 60 ? String(text.prefix(60)) + "…" : text
+            addBookmark(cfi: cfi, excerpt: excerpt)
+            status = String(localized: "しおりを追加しました")
+        }
     }
 
     func jump(to bookmark: Bookmark) {

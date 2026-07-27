@@ -1303,6 +1303,54 @@ function ttsClearHighlight() {
   }
 }
 
+// ---- 対訳用の本文抽出 ----
+// 翻訳の単位はブロック要素にする。文で切ると代名詞・主語が消えて訳が壊れ、
+// セクション丸ごとだとローカル LLM には長すぎて待ち時間が読めなくなる。
+const PASSAGE_SELECTOR =
+  'p, h1, h2, h3, h4, h5, h6, li, blockquote, dd, dt, figcaption, td, th, pre'
+const HEADING_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+// 1画面ぶんの上限。ページに収まる段落はふつう10前後なので、これに掛かるのは
+// 抽出がおかしいときだけ（＝暴走して LLM に何十本も投げるのを防ぐ保険）。
+const PASSAGE_MAX = 40
+
+/// いま画面に見えている段落を [{cfi, text, heading}] で返す。
+function collectVisiblePassages() {
+  const contents = currentContents()
+  const doc = contents?.doc
+  if (!doc?.body) return { passages: [], reason: 'no-content' }
+  // 画像だけのページ（表紙・口絵）は訳す本文が無い。
+  if (detectImagePage(doc)) return { passages: [], reason: 'image-page' }
+
+  // lastLocation.range = 現在ページの可視範囲（TTS の visible モードと同じ根拠）。
+  const range = State.view?.lastLocation?.range ?? null
+  const out = []
+  const seen = new Set()
+  for (const el of doc.body.querySelectorAll(PASSAGE_SELECTOR)) {
+    // 入れ子（li の中の p など）は内側だけ採る。両方採ると同じ文を二度訳すことになる。
+    if (el.querySelector(PASSAGE_SELECTOR)) continue
+    if (range) {
+      try { if (!range.intersectsNode(el)) continue } catch (_) { /* 判定不能なら採る */ }
+    }
+    const text = (el.textContent || '').replace(/\s+/g, ' ').trim()
+    if (!text) continue
+
+    let cfi = ''
+    try {
+      const r = doc.createRange()
+      r.selectNodeContents(el)
+      cfi = State.view?.getCFI?.(contents.index, r) ?? ''
+    } catch (_) { /* CFI が取れなくても訳は出せる */ }
+
+    const key = cfi || 'i:' + out.length + ':' + text
+    if (seen.has(key)) continue
+    seen.add(key)
+
+    out.push({ cfi, text, heading: HEADING_TAGS.has(el.localName) })
+    if (out.length >= PASSAGE_MAX) break
+  }
+  return { passages: out, index: contents.index, hadRange: !!range }
+}
+
 // 表示の強制の現在値。Swift 側のツールバー表示を実際の状態と合わせるために返す。
 function displayState() {
   return {
@@ -1429,6 +1477,24 @@ window.__reader = {
   // nav.xhtml / NCX のどちらから作られた toc でも同じ形で返す。
   getTOC: () => JSON.stringify(tocToJSON(State.view?.book?.toc)),
 
+  // 選択範囲の CFI と選択文（右クリックの「しおりを追加」用）。
+  // 選択が無い／CFI を作れないときは cfi:null を返す。呼び出し側は現在位置へ退避する。
+  getSelectionCFI: () => {
+    const view = State.view
+    const contents = currentContents()
+    const sel = contents?.doc?.getSelection?.()
+    if (!view || !sel || !sel.rangeCount) return JSON.stringify({ cfi: null, text: '' })
+    const text = String(sel).trim()
+    if (!text) return JSON.stringify({ cfi: null, text: '' })
+    let cfi = null
+    try {
+      cfi = view.getCFI(contents.index, sel.getRangeAt(0))
+    } catch (e) {
+      cfi = null
+    }
+    return JSON.stringify({ cfi, text })
+  },
+
   // 現在の選択テキスト（辞書登録・選択位置からの読み上げ用）。
   getSelection: () => {
     const doc = currentContents()?.doc
@@ -1538,6 +1604,12 @@ window.__reader = {
     ttsClearHighlight()
     return JSON.stringify(out)
   },
+
+  // ---- 対訳（LM Studio 連携）----
+  // いま画面に見えている範囲の本文を、翻訳に渡しやすい単位（ブロック要素）で列挙する。
+  // 翻訳そのものは Swift 側でやる。WebView からローカルの LLM サーバへは CSP(connect-src)
+  // でも CORS でも届かないため（VOICEVOX で実証済みの制約）。
+  getVisiblePassages: () => JSON.stringify(collectVisiblePassages()),
 
   // ---- 測定・デバッグ ----
   // 本文 iframe の window で任意 JS を評価（測定オーバーレイ・実測用）。

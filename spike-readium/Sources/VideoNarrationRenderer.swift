@@ -14,11 +14,15 @@ import WebKit
 //
 // この方式はオフライン（リアルタイム録画不要）で決定的。アセットは Resources/foliate/narration/。
 
-@MainActor
+// このレンダラは **メインアクタから外して** ある。フレームごとの JPEG デコード・
+// CVPixelBuffer への再描画・H.264 への投入をメインスレッドでやると、書き出し中ずっと
+// メインスレッドが埋まり、ページ送りやスライダーの操作が詰まって UI が固まる。
+// MainActor が要るのは WebView に触る部分だけなので、そこだけ隔離してある
+// （`makeEngine` と `NarrationEngine` のメソッド）。
 enum VideoNarrationRenderer {
-    struct Config {
+    struct Config: Sendable {
         /// 1 行ぶんの合成済みデータ。VOICEVOX 通信は Swift 側で済ませて渡す。
-        struct Line {
+        struct Line: Sendable {
             var text: String        // 表示テキスト（字幕の掃引に使う・読み替え適用済み）
             var queryJSON: String   // audio_query JSON（speed/pause 適用済み・synthesis と同一）
             var wav: Data           // synthesis の WAV（音声トラックは Swift 側で lineStarts に配置して mux）
@@ -51,27 +55,35 @@ enum VideoNarrationRenderer {
         }
     }
 
-    struct Output {
+    struct Output: Sendable {
         var data: Data
         var ext: String
     }
 
-    enum RenderError: Error { case prepareFailed(String), noFrames, writerFailed(String) }
+    enum RenderError: Error, Sendable { case prepareFailed(String), noFrames, writerFailed(String) }
 
-    /// 動画を生成する。onProgress は status 表示用（メインアクタ）。
-    static func render(
-        config: Config,
-        onProgress: @escaping (String) -> Void
-    ) async -> Output? {
+    /// harness を載せたオフスクリーン WebView を用意する。WebView に触るのでここだけ MainActor。
+    @MainActor
+    private static func makeEngine(width: Int, height: Int) -> NarrationEngine {
         let engine = NarrationEngine()
         let web = engine.makeWebView()
-
         let host = UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
-        web.frame = CGRect(x: 0, y: 0, width: config.width, height: config.height)
+        web.frame = CGRect(x: 0, y: 0, width: width, height: height)
         web.isHidden = true
         host?.addSubview(web)
-        defer { web.removeFromSuperview(); engine.teardown() }
+        return engine
+    }
+
+    /// 動画を生成する。onProgress は status 表示用（呼び出し側で MainActor へ渡すこと）。
+    /// この関数自体はメインアクタ外で走る。メインスレッドを触るのは WebView 呼び出しだけ。
+    static func render(
+        config: Config,
+        onProgress: @escaping @Sendable (String) -> Void
+    ) async -> Output? {
+        let engine = await makeEngine(width: config.width, height: config.height)
+        // teardown は removeFromSuperview まで面倒を見る（MainActor 隔離なので Task で投げる）。
+        defer { Task { @MainActor in engine.teardown() } }
 
         do {
             return try await withTaskCancellationHandler {
@@ -93,7 +105,7 @@ enum VideoNarrationRenderer {
                     "accent": config.colors.accent,
                     "fontFamily": "'Hiragino Mincho ProN', 'YuMincho', serif",
                 ]
-                let arg = FoliateEngine.jsonArg(payload)
+                let arg = await FoliateEngine.jsonArg(payload)
                 guard let prepStr = await engine.callAsync("return await window.__narr.prepare(\(arg))") as? String,
                       let prep = decode(prepStr) else {
                     throw RenderError.prepareFailed("prepare no result")
@@ -143,10 +155,13 @@ enum VideoNarrationRenderer {
 
     // MARK: - フレーム吸い出し → H.264
 
+    /// フレーム吸い出し → H.264。メインアクタ外で走らせるのが要点で、メインスレッドに
+    /// 乗るのは `engine.callAsync`（1フレーム1回の JS 呼び出し）だけ。デコード・
+    /// pixelBuffer 生成・エンコード投入はバックグラウンドで行う。
     private static func encodeVideo(
         engine: NarrationEngine, config: Config,
         totalDuration: Double, to url: URL,
-        onProgress: @escaping (String) -> Void
+        onProgress: @escaping @Sendable (String) -> Void
     ) async throws {
         let fps = config.fps
         let w = config.width, h = config.height
@@ -338,9 +353,10 @@ final class NarrationEngine: NSObject, WKScriptMessageHandler {
     nonisolated func userContentController(
         _ ucc: WKUserContentController, didReceive message: WKScriptMessage
     ) {
-        guard let body = message.body as? [String: Any],
-              (body["type"] as? String) == "narr-ready" else { return }
+        // message.body は MainActor 隔離なので、読むところから MainActor 内で行う。
         Task { @MainActor in
+            guard let body = message.body as? [String: Any],
+                  (body["type"] as? String) == "narr-ready" else { return }
             self.isReady = true
             if let c = self.readyCont { self.readyCont = nil; c.resume() }
         }
