@@ -28,7 +28,11 @@ VERSION="$(awk -F'"' '/MARKETING_VERSION:/ {print $2}' "$REPO/spike-readium/proj
 [ -n "$VERSION" ] || { err "MARKETING_VERSION を project.yml から読めません"; exit 1; }
 TAG="${TAG:-v$VERSION}"
 
-EXPORT="$(mktemp -d "${TMPDIR:-/tmp}/tategaki-release.XXXXXX")"
+# ビルド木はリポジトリと同じボリュームに置く。$TMPDIR は起動ディスクにあり、
+# Xcode のビルド（数 GB）が入らずに ENOSPC で落ちることがある（実際に落ちた）。
+DIST="$REPO/dist"
+mkdir -p "$DIST"
+EXPORT="$(mktemp -d "$DIST/build.XXXXXX")"
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
 
 cleanup() {
@@ -80,8 +84,6 @@ codesign --sign - --deep --force --timestamp=none "$APP"
 codesign --verify "$APP" && ok "署名の検証を通過"
 
 # --- 4. ZIP ---------------------------------------------------------------
-DIST="$REPO/dist"
-mkdir -p "$DIST"
 ZIP="$DIST/$APP_NAME-$VERSION-maccatalyst.zip"
 rm -f "$ZIP"
 say "ZIP を作成"
