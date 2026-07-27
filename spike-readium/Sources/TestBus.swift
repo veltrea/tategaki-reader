@@ -30,7 +30,18 @@ import Network
 final class TestBus {
     static let shared = TestBus()
 
-    static let port: UInt16 = 47831
+    /// 待ち受けポート。既定は 47831。
+    ///
+    /// ワークツリーを分けて並行に作業すると、両方のビルドが同じポートを取り合って
+    /// 「片方のテストが、もう片方のアプリに当たっていた」という混線が起きる
+    ///（allowLocalEndpointReuse を立てているので後から起動した側が黙って奪う）。
+    /// 環境変数 EPUB_TEST_BUS_PORT で振り分けられるようにしてある。テスト側（axdriver.py /
+    /// bus.py / MCP サーバ）も同じ変数を見るので、ワークツリーごとに値を決めておけばよい。
+    static let port: UInt16 = {
+        let raw = ProcessInfo.processInfo.environment["EPUB_TEST_BUS_PORT"] ?? ""
+        if let n = UInt16(raw.trimmingCharacters(in: .whitespaces)), n >= 1024 { return n }
+        return 47831
+    }()
 
     /// 対象モデル（App 起動時に注入）。
     weak var model: AppModel?
@@ -162,6 +173,57 @@ final class TestBus {
             guard let reader else { return ["ok": false, "error": "reader not attached (open a book first)"] }
             await reader.testTurnPage(forward: name == "goForward")
             return ["ok": true]
+        case "tapLeft", "tapRight", "tapDown", "tapUp":
+            // 左右端タップゾーン／矢印キーと同じ経路（押された向き → ReaderModel が
+            // 本単位の書字方向で進む/戻るを解決）。goForward/goBackward は解決済みの
+            // 進む/戻るを直接叩くので、左右の向き判定そのものはこちらでないと検証できない。
+            guard let reader else { return ["ok": false, "error": "reader not attached (open a book first)"] }
+            let side: PageSide = name == "tapLeft" ? .left
+                : name == "tapRight" ? .right
+                : name == "tapDown" ? .next : .previous
+            await reader.pageStep(side: side)
+            return [
+                "ok": true,
+                "side": name,
+                "bookRTL": reader.bookIsRTL,
+                "fraction": reader.progression,
+            ]
+        case "display":
+            // 表示の強制（綴じ方向・見開き・アスペクト比）の取得と変更。
+            // 例: {"cmd":"display","binding":"rtl"} / {"cmd":"display","aspect":"844:1200"}
+            //     {"cmd":"display","imageSpread":"always","textSpread":"never"}
+            //     {"cmd":"display","aspect":""} で比率の固定を解除。
+            guard let reader else { return ["ok": false, "error": "reader not attached (open a book first)"] }
+            if let raw = cmd["binding"] as? String, let d = BindingDirection(rawValue: raw) {
+                reader.setBindingDirection(d)
+            }
+            if let raw = cmd["imageSpread"] as? String, let m = SpreadMode(rawValue: raw) {
+                reader.setImageSpread(m)
+            }
+            if let raw = cmd["textSpread"] as? String, let m = SpreadMode(rawValue: raw) {
+                reader.setTextSpread(m)
+            }
+            if let raw = cmd["aspect"] as? String {
+                reader.setForcedAspect(AspectRatio(storageString: raw))
+            }
+            // JS へ投げた変更が返ってくるまで待つ（テストが次の assert へ進む前に確定させる）。
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            let live = await reader.engine.callJSON("window.__reader.displayState()")
+            return [
+                "ok": true,
+                "binding": reader.bindingDirection.rawValue,
+                "imageSpread": reader.imageSpread.rawValue,
+                "textSpread": reader.textSpread.rawValue,
+                "aspect": reader.forcedAspect?.storageString ?? NSNull(),
+                "detectedAspect": reader.detectedAspect?.storageString ?? NSNull(),
+                "bookRTL": reader.bookIsRTL,
+                "js": live ?? NSNull(),
+            ]
+        case "spreadState":
+            // bridge が組んでいる見開きの実態（どの章とどの章を並べているか）。
+            guard let reader else { return ["ok": false, "error": "reader not attached (open a book first)"] }
+            let raw = await reader.engine.callJSON("window.__reader.spreadState()")
+            return ["ok": true, "spread": raw ?? NSNull()]
         case "search":
             guard let reader else { return ["ok": false, "error": "reader not attached (open a book first)"] }
             reader.runSearch((cmd["query"] as? String) ?? "")

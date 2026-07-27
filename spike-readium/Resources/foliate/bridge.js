@@ -82,8 +82,22 @@ const State = {
   writingMode: 'auto',
   // OPF の primary-writing-mode（auto のときの保険。下の opfWritingHint を参照）。
   bookWritingHint: null,
-  // 本全体としての読み進む向き（進捗スライダーの鏡像に使う）。noteSectionDirection を参照。
+  // 本全体としての読み進む向き（進捗スライダーの鏡像・左右タップの向きに使う）。
+  // noteSectionDirection を参照。
   bookDir: 'ltr',
+  // bookDir を本文の実測で確定できたか。false のうちは OPF 由来の暫定値。
+  bookDirConfirmed: false,
+  // 綴じ方向の強制 'auto' | 'rtl' | 'ltr'。auto 以外は実測にも OPF にも必ず勝つ。
+  // 漫画・写真集は本文が画像だけで向きを測りようがないので、読み手の指定が最後の拠り所になる。
+  forcedBinding: 'auto',
+  // 見開きの強制 'auto' | 'always' | 'never'。画像ページと本文で別々に持つ
+  //（漫画は見開き・小説は単ページ、のような使い分けをそのまま設定にしたいため）。
+  imageSpread: 'auto',
+  textSpread: 'auto',
+  // 画像を当てはめる縦横比 {w, h}（null = 強制しない）。収めるのではなく引き伸ばす。
+  forcedAspect: null,
+  // この本から拾えた縦横比（OPF の viewport / 先頭画像の実寸）。UI の既定値に使う。
+  detectedAspect: null,
   // TTS
   ttsBlocks: null,          // 現在ブロックの文リスト [{mark, text}]
   ttsHighlightCFI: null,    // 現在ハイライト中の annotation value(CFI)
@@ -106,6 +120,107 @@ function opfWritingHint(book) {
     }
   } catch (e) { /* メタが無いのは普通のこと */ }
   return null
+}
+
+// OPF の <spine page-progression-direction>。本全体のページ送りの向きの暫定値に使う。
+//
+// 本文の実測（pageDirection）より弱い扱いにしているのは、横組みへ変換された本でも
+// rtl が残っていることがあるため。それでも読むのは、primary-writing-mode を持たない本が
+// 多数派だから——手元の書棚 37 冊で ppd は 37 冊全部が rtl を持つのに対し、
+// primary-writing-mode は 14 冊しか持っていない。ppd を捨てると、残りの本は
+// 「本文を一度描くまで縦書きだと分からない」状態になる（下の noteSectionDirection 参照）。
+function opfPageDirection(book) {
+  try {
+    const spine = book?.resources?.opf?.querySelector('spine')
+    const v = (spine?.getAttribute('page-progression-direction') || '').trim().toLowerCase()
+    return (v === 'rtl' || v === 'ltr') ? v : null
+  } catch (e) { /* 無いのは普通のこと */ }
+  return null
+}
+
+// 表示の強制（綴じ方向・見開き・アスペクト比）を opts から読む。
+// 本を開くときと、あとから設定を変えたときの両方から通る。知らないキーは触らない
+//（Swift 側が一部だけ送ってくることがあるため）。
+function readDisplayOverrides(opts = {}) {
+  if (['auto', 'rtl', 'ltr'].includes(opts.binding)) State.forcedBinding = opts.binding
+  if (['auto', 'always', 'never'].includes(opts.imageSpread)) State.imageSpread = opts.imageSpread
+  if (['auto', 'always', 'never'].includes(opts.textSpread)) State.textSpread = opts.textSpread
+  if ('aspect' in opts) State.forcedAspect = normalizeAspect(opts.aspect)
+}
+
+// {w, h} 形式の縦横比に整える。読めない値は null（＝強制しない）。
+function normalizeAspect(a) {
+  if (!a) return null
+  const w = Number(a.w ?? a.width), h = Number(a.h ?? a.height)
+  return (w > 0 && h > 0) ? { w, h } : null
+}
+
+// この本のページの縦横比を拾う。強制アスペクト比の既定値としてUIに出すためのもので、
+// 拾えなくても表示には影響しない。
+//
+// 見るのは OPF の viewport 系メタ。漫画の EPUB は判型をここに書く慣習があり、
+// OMF（日本の漫画配信で使われる形式）は omf:viewport、EPUB 3 の固定レイアウトは
+// rendition:viewport に "width=844, height=1200" の形で入る。
+// 無い本は先頭の画像の実寸から拾う（imageRatioOf 側で後追いする）。
+function detectBookAspect(book) {
+  try {
+    const opf = book?.resources?.opf
+    if (!opf) return null
+    for (const m of opf.querySelectorAll('meta')) {
+      const prop = (m.getAttribute('property') || m.getAttribute('name') || '').toLowerCase()
+      if (!prop.endsWith('viewport')) continue
+      const text = (m.getAttribute('content') || m.textContent || '')
+      const w = /width\s*=\s*(\d+(?:\.\d+)?)/i.exec(text)
+      const h = /height\s*=\s*(\d+(?:\.\d+)?)/i.exec(text)
+      if (w && h) return normalizeAspect({ w: parseFloat(w[1]), h: parseFloat(h[1]) })
+    }
+  } catch (e) { /* メタが無いのは普通のこと */ }
+  return null
+}
+
+// OPF に判型が書いていない本のために、最初のほうの画像面の実寸から縦横比を拾う。
+// 強制アスペクト比の入力欄に出す既定値を作るだけなので、拾えなくても表示は変わらない。
+async function fillAspectFromFirstImage() {
+  try {
+    const n = State.view?.book?.sections?.length ?? 0
+    for (let i = 0; i < Math.min(n, 8); i++) {
+      if (!(await isImageSection(i))) continue
+      const src = await sectionImageSrc(i)
+      if (!src) continue
+      const size = await new Promise(resolve => {
+        const img = new Image()
+        img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight })
+        img.onerror = () => resolve(null)
+        img.src = src
+      })
+      if (size && size.w > 0 && size.h > 0) { State.detectedAspect = size; return }
+    }
+  } catch (e) { /* 既定値を出せないだけ */ }
+}
+
+// 前付け・後付け（表紙・目次・奥付など）か。本文ではないので、本全体の向きの判断材料にしない。
+//
+// 日本語の EPUB では、これらの面だけが本文と別系統で作られていることが非常に多い。
+// 青空文庫由来の本は表紙が cover.css（縦書き指定なし）だけを読み、本文は nsepub-v.css で
+// 縦書きにする——という形が手元の 10 冊すべてで一致した。初期に作られた 1 冊が
+// テンプレートとして複製され続けた結果と思われる。表紙を本文の代表として測ると、
+// 縦書きの本を横組みと誤認する。
+const MATTER_TYPES =
+  /\b(cover|toc|landmarks|frontmatter|backmatter|titlepage|halftitlepage|colophon|copyright-page|imprint|dedication|acknowledgments|bibliography|index)\b/i
+function isFrontOrBackMatter(doc) {
+  try {
+    const els = [doc.documentElement, doc.body,
+      doc.body?.firstElementChild, doc.querySelector('section, div')]
+    for (const el of els) {
+      if (!el) continue
+      // XHTML として読まれた文書では epub:type は名前空間付き属性になる。
+      const v = el.getAttribute?.('epub:type')
+        || el.getAttributeNS?.('http://www.idpf.org/2007/ops', 'type')
+        || el.getAttribute?.('role') || ''
+      if (MATTER_TYPES.test(v)) return true
+    }
+  } catch (e) { /* 判定できなければ本文とみなす */ }
+  return false
 }
 
 // 組み方向クラス（EBPAJ の制作ガイドが定めた慣習）の既定。
@@ -144,12 +259,75 @@ function writingModeCSS() {
   return [WM_CLASS_CSS + hint, '']
 }
 
+// 縦書きで見開きにするときの本文ブロックの幅。paginator の既定（--_max-block-size: 1440px）
+// の2倍＝紙でいう見開き1面ぶん。画面より広ければ paginator のグリッドが頭打ちにするので、
+// 狭い窓でも破綻しない。
+const VERTICAL_SPREAD_BLOCK_SIZE = '2880px'
+
+// 直近に反映した見開きの状態（'mode:vertical'）。relocate のたびに呼ばれるので、
+// 変わっていないときは何もしない（render を呼び直すと組版がやり直しになる）。
+let appliedTextSpread = null
+
+// 本文の見開き。横書きと縦書きで、効かせるところがまったく違う。
+//
+// **横書き**は列数で決まる。paginator は既定で「横長の画面なら2列・縦長なら1列」に
+// 切り替える（--_max-column-count と --_max-column-count-portrait）。auto はそれに任せ、
+// always/never はどちらの向きでも固定したいので portrait 用の変数も一緒に倒す。
+// shadow root が closed で外から #top に触れないため、paginator 側に
+// max-column-count-portrait 属性を通す最小パッチを当ててある。
+//
+// **縦書き**では列数を増やしても見開きにならない。CSS の多段組は列を inline 方向へ積むので、
+// 縦書き（inline＝上下）では列が上下に並び、「上段が1ページ・下段が次のページ」という
+// 紙とは似ても似つかない形になる。縦書きの1ページは block 方向（右→左）の幅で決まるので、
+// 本文ブロックの幅そのものを広げる。こうすると行が右上から左へ続けて流れ、
+// めくる単位も2ページぶんになる——紙の見開きと同じ読み方になる。
+function applyTextSpread(doc, { rerender = false } = {}) {
+  const r = State.view?.renderer
+  if (!r?.setAttribute) return false
+  const vertical = doc?.body ? isVerticalDoc(doc) : false
+  const key = State.textSpread + ':' + vertical
+  if (appliedTextSpread === key) return false
+  appliedTextSpread = key
+
+  const columns = (!vertical && State.textSpread === 'always') ? '2'
+    : (!vertical && State.textSpread === 'never') ? '1' : null
+  for (const attr of ['max-column-count', 'max-column-count-portrait']) {
+    if (columns == null) r.removeAttribute(attr)
+    else r.setAttribute(attr, columns)
+  }
+  if (vertical && State.textSpread === 'always') {
+    r.setAttribute('max-block-size', VERTICAL_SPREAD_BLOCK_SIZE)
+  } else {
+    // never は既定に戻すだけでよい（縦書きの既定は元々1ページぶんの幅）。
+    r.removeAttribute('max-block-size')
+  }
+  if (rerender) r.render?.()
+  return true
+}
+
 function applyStyles() {
   if (!State.view) return
   const [pre, post] = writingModeCSS()
   const css = themeCSS(State.style.theme, State.style.fontScale, State.style.lineHeight)
     + '\n' + (State.userCSS || '') + '\n' + post
   State.view.renderer?.setStyles?.([pre, css])
+}
+
+// これ以下しか文字が無い面は「絵の面」とみなす（キャプション・ノンブル程度は許す）。
+const TEXTLESS_MAX_CHARS = 10
+
+// この面は書字方向の証拠になるか。
+//
+// ならないのは絵だけの面である。漫画・写真集の EPUB は全ページが画像1枚で、日本の
+// 配信フォーマット（OMF 等）では spine が XHTML を挟まず JPEG を直接指すことさえある。
+// その場合 iframe に載るのは WebKit が画像のために作る文書なので、body は必ず
+// horizontal-tb / ltr になる——本の綴じ方とは何の関係もない値である。これを本文の実測と
+// して採ると、右綴じの漫画が必ず左綴じに倒れる（noteSectionDirection の確定処理を参照）。
+// 絵の面には向きの手がかりが原理的に無いので、OPF の ppd を暫定値のまま残す。
+function hasDirectionEvidence(doc) {
+  if ((doc.contentType || '').startsWith('image/')) return false
+  const text = (doc.body?.textContent || '').replace(/[\s　]/g, '')
+  return text.length > TEXTLESS_MAX_CHARS
 }
 
 // ページ送りの向き。縦書きは常に右→左。横書きは本文の direction が rtl のときだけ右→左。
@@ -169,19 +347,41 @@ function pageDirection(doc) {
 // 向きは本ではなく章ごとの性質である（foliate の paginator も getDirection を章ごとに
 // 呼んで #vertical/#rtl を決め直す）。縦書きの本でも表紙・前付け・目次・奥付は横組みなので、
 // 開いた瞬間の1回だけ測って本全体の値として固定すると、着地した章によって当たり外れが出る。
-// ページ送り・矢印キー・タップゾーン・朗読動画の向きは「いま画面に組まれているもの」に
-// 従うべきなので、これらは章ごとの値をそのまま使う。
+// dir/vertical（返り値）は「いま画面に組まれているもの」なので、朗読動画の縦横のように
+// 描画そのものを合わせたいところだけがこれを使う。
 //
-// 一方、進捗スライダーの鏡像だけは本単位でなければならない（章をまたぐたびに摘みが左右へ
-// 飛ぶと読めない）。そこで bookDir は縦書き／RTL の章を一度でも見たら rtl に倒し、以後
-// 戻さない。横書きの本が縦書きの章を持つことはないので、これで誤って鏡像化はしない。
-// 初期値は OPF の primary-writing-mode から。spine の page-progression-direction は
-// 横組みの本でも rtl のまま残っていることが多いので種にしない（pageDirection のコメント参照）。
+// 一方、進捗スライダーの鏡像と左右タップの向きは本単位でなければならない。章ごとの値だと、
+// 摘みが章をまたぐたび左右へ飛び、同じ左タップの意味が進む⇄戻るへ反転する。そこで bookDir は
+// 縦書き／RTL の章を一度でも見たら rtl に倒し、以後戻さない（横書きの本が縦書きの章を
+// 持つことはないので、これで誤って鏡像化はしない）。
+//
+// 問題は「本文を一度も描いていない間」——つまり表紙を開いた直後である。ここで bookDir を
+// 取り違えると、左右タップだけが逆を向く。実際、青空文庫由来の本は表紙が横組みで
+// primary-writing-mode も持たないため、表紙にいる間は横組みの本と見分けがつかず、
+// 左タップ（縦書きなら「進む」）が「戻る」になって無反応だった（手元の 10 冊すべてで発生）。
+// そこで開くときに OPF の ppd を暫定値として入れておき（opfPageDirection 参照）、
+// 本文——前付け・後付けでない章——を実測するまでは下ろさない。実測で横組みだと分かれば
+// そこで ltr に確定するので、ppd が残骸だった本も取りこぼさない。
 function noteSectionDirection(doc) {
   if (!doc?.body) return { vertical: false, dir: State.bookDir }
   const vertical = isVerticalDoc(doc)
+  // 読み手が綴じ方向を決めているなら、本の申告も実測も見ない。
+  // 章ごとの dir も強制値で返す（左右タップと画面の見え方を食い違わせないため）。
+  if (State.forcedBinding !== 'auto') {
+    State.bookDir = State.forcedBinding
+    State.bookDirConfirmed = true
+    return { vertical, dir: State.forcedBinding }
+  }
   const dir = pageDirection(doc)
-  if (dir === 'rtl') State.bookDir = 'rtl'
+  if (dir === 'rtl') {
+    State.bookDir = 'rtl'
+    State.bookDirConfirmed = true
+  } else if (!State.bookDirConfirmed && !isFrontOrBackMatter(doc) && hasDirectionEvidence(doc)) {
+    // 本文が横組み＝OPF の ppd は変換で残った残骸だった。暫定値を下ろして確定する。
+    // 絵だけの面は根拠にしない（hasDirectionEvidence を参照）。
+    State.bookDir = 'ltr'
+    State.bookDirConfirmed = true
+  }
   return { vertical, dir }
 }
 
@@ -252,6 +452,7 @@ function clearImageTweaks(doc) {
     for (const el of doc.body.querySelectorAll('img, svg')) {
       if (el.__bridgeFitH == null) continue
       el.__bridgeFitH = null
+      el.__bridgeFitForced = null
       for (const prop of ['height', 'max-height', 'width', 'max-width', 'object-fit'])
         el.style.removeProperty(prop)
     }
@@ -421,13 +622,23 @@ function fitImages(doc) {
       }
       if (!isFigureImage(el)) continue
       // 横長の画像は幅からはみ出さない高さに抑える（ボックスと絵柄をぴったり一致させる）。
-      const ratio = naturalRatio(el)
+      // 比率を強制しているときは、絵の実比率ではなく指定の比率で枠を決める。
+      const forced = State.forcedAspect
+      const ratio = forced ? forced.w / forced.h : naturalRatio(el)
       let target = h
       if (ratio > 0 && pageW > 0) target = Math.min(h, Math.round(pageW / ratio))
-      if (el.__bridgeFitH === target) continue
+      if (el.__bridgeFitH === target && el.__bridgeFitForced === !!forced) continue
       el.__bridgeFitH = target
+      el.__bridgeFitForced = !!forced
       el.style.setProperty('height', `${target}px`, 'important')
       el.style.setProperty('max-height', `${target}px`, 'important')
+      if (forced) {
+        // 指定の比率へ引き伸ばす。幅も決め打ちしないと絵の実比率のままになる。
+        el.style.setProperty('width', `${Math.round(target * ratio)}px`, 'important')
+        el.style.setProperty('max-width', '100%', 'important')
+        el.style.setProperty('object-fit', 'fill', 'important')
+        continue
+      }
       // 比率が分かるなら幅は成り行きでよい（img は実寸、svg は viewBox から決まる）。
       // viewBox の無い svg だけは固有サイズを持たず width:auto で潰れるので枠いっぱいにする。
       el.style.setProperty('width', ratio > 0 ? 'auto' : '100%', 'important')
@@ -460,6 +671,20 @@ async function sectionDoc(index) {
   return new DOMParser().parseFromString(html, 'application/xhtml+xml')
 }
 
+// spine のこの項目が指すファイルの media-type。
+//
+// EPUB の spine は本来 XHTML を指すものだが、日本の漫画・写真集の配信形式（OMF）は
+// **XHTML を挟まず JPEG を直接 spine に並べる**。その章を XHTML としてパースしても
+// 当然失敗するので、パースの前にここで見分ける。見分けないと画像章がすべて
+// 「テキストの章」に落ち、見開きも画像レイヤーも一切効かなくなる。
+function sectionMediaType(index) {
+  const href = State.view?.book?.sections?.[index]?.id
+  if (!href) return ''
+  const item = State.view?.book?.resources?.manifest?.find(i => i.href === href)
+  return (item?.mediaType || '').toLowerCase()
+}
+const isImageSpineItem = index => sectionMediaType(index).startsWith('image/')
+
 function imageSrcOf(doc) {
   const el = doc?.body?.querySelector('img, image')
   if (!el) return ''
@@ -468,17 +693,39 @@ function imageSrcOf(doc) {
     || el.getAttribute('xlink:href') || ''
 }
 
+// この章の絵の URL。spine が画像を直接指しているなら、その章のロード結果が絵そのもの。
+async function sectionImageSrc(index) {
+  const s = State.view?.book?.sections?.[index]
+  if (!s) return ''
+  if (isImageSpineItem(index)) {
+    try { return await s.load() } catch (e) { return '' }
+  }
+  return imageSrcOf(await sectionDoc(index))
+}
+
 async function isImageSection(index) {
   if (index < 0) return false
   if (sectionKind.has(index)) return sectionKind.get(index) === 'image'
   let kind = 'text'
-  try {
+  if (isImageSpineItem(index)) kind = 'image'
+  else try {
     const doc = await sectionDoc(index)
     if (doc && detectImagePage(doc)) kind = 'image'
   } catch (e) { /* 読めない章はテキスト扱いにして先へ進む */ }
   sectionKind.set(index, kind)
   return kind === 'image'
 }
+
+// 本が申告しているこの面の左右（spine itemref の page-spread-left/right）。
+// 漫画の EPUB はこれを全面に持っていることが多く、持っているなら組の正解はこれで決まる
+//（透明ページの入れ忘れを疑って数え直す必要がない）。
+function declaredSide(index) {
+  const s = State.view?.book?.sections?.[index]?.pageSpread
+  return (s === 'left' || s === 'right') ? s : null
+}
+// 見開きの組で先に来る側。右綴じは右ページが先。
+const leadSide = () => State.bookDir === 'rtl' ? 'right' : 'left'
+const trailSide = () => State.bookDir === 'rtl' ? 'left' : 'right'
 
 // 画像ページが続く区間で、組が始まる index。spine 先頭から続く区間は表紙を単独にする。
 async function spreadBase(index) {
@@ -493,11 +740,13 @@ async function imageRatioOf(index) {
   if (sectionRatio.has(index)) return sectionRatio.get(index)
   let ratio = 0
   try {
-    const doc = await sectionDoc(index)
-    const svg = doc?.body?.querySelector('svg[viewBox]')
-    if (svg) ratio = naturalRatio(svg)
+    if (!isImageSpineItem(index)) {
+      const doc = await sectionDoc(index)
+      const svg = doc?.body?.querySelector('svg[viewBox]')
+      if (svg) ratio = naturalRatio(svg)
+    }
     if (!ratio) {
-      const src = imageSrcOf(doc)
+      const src = await sectionImageSrc(index)
       if (src) ratio = await new Promise(resolve => {
         const img = new Image()
         img.onload = () => resolve(img.naturalHeight > 0 ? img.naturalWidth / img.naturalHeight : 0)
@@ -521,14 +770,31 @@ async function isWideImage(index) {
 // 返り値 { first, partner }。partner が null なら単独ページ。
 async function spreadGroupOf(index) {
   const single = { first: index, partner: null }
+  if (State.imageSpread === 'never') return single
   if (index < 0 || !(await isImageSection(index))) return single
+
+  // 本が page-spread-left/right を申告しているなら、それが組の正解。数え直すより確実で、
+  // 透明ページの入れ忘れでずれた本も本の申告どおりに組める（declaredSide のコメント参照）。
+  const side = declaredSide(index)
+  if (side && State.imageSpread !== 'always') {
+    if (side === leadSide() && declaredSide(index + 1) === trailSide()
+        && await isImageSection(index + 1)) return { first: index, partner: index + 1 }
+    if (side === trailSide() && declaredSide(index - 1) === leadSide()
+        && await isImageSection(index - 1)) return { first: index - 1, partner: index }
+    return single      // 相方のいない面（見開きの片割れが無い＝単独で置かれている）
+  }
+
   const base = await spreadBase(index)
   if (index < base) return single       // 表紙、およびずらしで押し出された面
+  // 強制見開きでは横長かどうかを見ない（本の作りが粗くて自動で組まれない本の救済なので、
+  // 読み手が「常に見開き」と言った以上は機械的に2枚ずつ並べる）。
+  const forced = State.imageSpread === 'always'
   let i = base
   for (let guard = 0; guard < 1000 && i <= index; guard++) {
     let partner = null
-    if (!(await isWideImage(i))
-        && await isImageSection(i + 1) && !(await isWideImage(i + 1))) partner = i + 1
+    if ((forced || !(await isWideImage(i)))
+        && await isImageSection(i + 1)
+        && (forced || !(await isWideImage(i + 1)))) partner = i + 1
     const span = partner == null ? 1 : 2
     if (index < i + span) return { first: i, partner }
     i += span
@@ -552,19 +818,21 @@ function imageReady(img) {
 
 // 画像ページを直接描く。単独なら1枚、組なら2枚を左右に並べる（右綴じは先のページが右）。
 async function showImagePage(index) {
-  const first = imageSrcOf(await sectionDoc(index))
+  const first = await sectionImageSrc(index)
   slog('show', 'idx=' + index, 'src=' + (first ? 'ok' : 'none'))
   if (!first) { hideImageLayer(); return }
   const partner = await spreadPartnerOf(index)
   const srcs = [first]
   if (partner != null) {
-    const second = imageSrcOf(await sectionDoc(partner))
+    const second = await sectionImageSrc(partner)
     if (second) srcs.push(second)
   }
   slog('show', 'idx=' + index, 'partner=' + partner, 'n=' + srcs.length)
 
   const layer = ensureImageLayer()
-  layer.style.flexDirection = State.view?.book?.dir === 'rtl' ? 'row-reverse' : 'row'
+  // 並べる向きは本の綴じ方向（State.bookDir）で決める。book.dir は OPF の
+  // page-progression-direction そのままなので、読み手の強制指定が効かない。
+  layer.style.flexDirection = State.bookDir === 'rtl' ? 'row-reverse' : 'row'
   layer.style.background = pageBackground()
   const imgs = srcs.map(src => {
     const img = document.createElement('img')
@@ -581,8 +849,43 @@ async function showImagePage(index) {
   layer.style.display = 'flex'
   if (State.view) State.view.style.visibility = 'hidden'
   State.imagePage = { index, partner }
+  layoutImageLayer()
   await Promise.all(imgs.map(imageReady))
 }
+
+// 強制アスペクト比のとき、画像を指定比率へ引き伸ばして置き直す。
+//
+// 比率を CSS の aspect-ratio だけで当てると、幅の上限に当たったときに高さが追従せず
+// 比率が崩れる（置換要素の width/height は auto と固定値が混ざると解決順が変わる）。
+// 枠を実測して px で入れるほうが確実なので、そうしている。窓の大きさが変われば入れ直す。
+function layoutImageLayer() {
+  if (!imageLayer || !State.imagePage) return
+  const imgs = [...imageLayer.querySelectorAll('img')]
+  if (!imgs.length) return
+  const ar = State.forcedAspect
+  if (!ar) {
+    // 強制なし＝元の比率のまま収める（showImagePage が入れた指定に戻す）。
+    for (const img of imgs) Object.assign(img.style, {
+      width: 'auto', height: '100%',
+      maxWidth: `${Math.floor(100 / imgs.length)}%`, maxHeight: '100%',
+      objectFit: 'contain',
+    })
+    return
+  }
+  const boxW = imageLayer.clientWidth / imgs.length
+  const boxH = imageLayer.clientHeight
+  if (!(boxW > 0 && boxH > 0)) return
+  const ratio = ar.w / ar.h
+  let w = boxH * ratio, h = boxH
+  if (w > boxW) { w = boxW; h = boxW / ratio }
+  for (const img of imgs) Object.assign(img.style, {
+    width: `${Math.floor(w)}px`, height: `${Math.floor(h)}px`,
+    maxWidth: 'none', maxHeight: 'none',
+    objectFit: 'fill',      // 収めるのではなく引き伸ばす（この機能の目的そのもの）
+  })
+}
+
+window.addEventListener('resize', () => layoutImageLayer())
 
 // 画像面の地色。本文と同じ配色にして、切り替わりで白が差し込まないようにする。
 function pageBackground() {
@@ -705,7 +1008,7 @@ function detectImagePage(doc) {
     const hasImage = !!doc.body.querySelector('img, svg, image')
     if (!hasImage) return false
     const text = (doc.body.textContent || '').replace(/[\s　]/g, '')
-    return text.length <= 10
+    return text.length <= TEXTLESS_MAX_CHARS
   } catch (e) { return false }
 }
 
@@ -716,6 +1019,9 @@ async function openBook(opts = {}) {
       State.writingMode = opts.writingMode
     // 表示モードも最初の組版より前に決めておく（画像の寸法制約 CSS の有無が変わる）。
     if (opts.renderMode === 'raw' || opts.renderMode === 'friendly') renderMode = opts.renderMode
+    // 表示の強制（綴じ方向・見開き・アスペクト比）も組版より前に。綴じ方向は最初の
+    // relocate で左右タップの向きに使われるので、遅れると1ページぶん逆を向く。
+    readDisplayOverrides(opts)
     const res = await fetch(BOOK_URL)
     if (!res.ok) throw new Error('book fetch failed: ' + res.status)
     const blob = await res.blob()
@@ -751,6 +1057,8 @@ async function openBook(opts = {}) {
       // 向きは章ごとに変わる。ready の1回きりでは着地した章の性質に左右されるので、
       // 表示が落ち着くたびに取り直す（noteSectionDirection のコメントを参照）。
       const orient = noteSectionDirection(doc)
+      // 本文の見開きは縦書きと横書きで効かせ方が違うので、章の向きが変わったら入れ直す。
+      applyTextSpread(doc, { rerender: true })
       toSwift({
         type: 'relocate',
         fraction: d.fraction ?? 0,
@@ -785,8 +1093,22 @@ async function openBook(opts = {}) {
     // CSS は初回の組版から効く（後から入れても既に組まれたページには効かない）。
     State.bookWritingHint = opfWritingHint(book)
     // 本を開き直すたびに本全体の向きも引き直す（前の本の値を持ち越さない）。
-    State.bookDir = (State.writingMode === 'vertical'
-      || (State.writingMode === 'auto' && State.bookWritingHint === 'vertical')) ? 'rtl' : 'ltr'
+    // 強制モードと primary-writing-mode は本全体の宣言なのでここで確定。
+    // ppd しか無い本は暫定にとどめ、本文を実測して確定させる（noteSectionDirection 参照）。
+    const forcedRTL = State.writingMode === 'vertical'
+      || (State.writingMode === 'auto' && State.bookWritingHint === 'vertical')
+    const forcedLTR = State.writingMode === 'horizontal'
+      || (State.writingMode === 'auto' && State.bookWritingHint === 'horizontal')
+    // 読み手が綴じ方向を決めていればそれが最優先（noteSectionDirection も同じ扱いをする）。
+    State.bookDirConfirmed = State.forcedBinding !== 'auto' || forcedRTL || forcedLTR
+    State.bookDir = State.forcedBinding !== 'auto' ? State.forcedBinding
+      : forcedRTL ? 'rtl'
+      : forcedLTR ? 'ltr'
+      : (opfPageDirection(book) === 'rtl' ? 'rtl' : 'ltr')
+    State.detectedAspect = detectBookAspect(book)
+    // 本を開き直したら、前の本で入れた見開きの状態は持ち越さない。
+    // 実際の反映は最初の relocate（章の向きが分かった時点）で行う。
+    appliedTextSpread = null
     applyStyles()
 
     if (opts.cfi) {
@@ -815,7 +1137,16 @@ async function openBook(opts = {}) {
       writingMode: State.writingMode,
       bookWritingHint: State.bookWritingHint,
       fixedLayout: (book?.rendition?.layout === 'pre-paginated'),
+      // 表示の強制は displayState() をそのまま載せる。Swift 側はここを見て状態を写すので、
+      // 一部だけ載せると載せ忘れた項目が「指定なし」に見えて上書きされる（実際 aspect で踏んだ）。
+      ...displayState(),
     })
+    // OPF に判型が無い本は画像の実寸から拾い直し、取れたら追って知らせる。
+    if (!State.detectedAspect) {
+      fillAspectFromFirstImage().then(() => {
+        if (State.detectedAspect) toSwift({ type: 'display', ...displayState() })
+      })
+    }
   } catch (e) {
     toSwift({ type: 'error', message: String(e && e.message ? e.message : e) })
   }
@@ -837,6 +1168,36 @@ function tocToJSON(items, prefix = '') {
   })
 }
 
+// 表紙の指定が無い本のための、spine 先頭からの拾い直し。
+//
+// foliate の getCover() が見るのは ①manifest の properties="cover-image"
+// ②EPUB 2 の <meta name="cover"> ③guide の reference[type=cover] の3つだが、
+// 漫画・写真集（OMF）はそのどれも持たないことがある——『レディ＆オールドマン 1』は
+// 実際に3つとも無く、表紙の手がかりはファイル名の "_cover" だけだった。
+// ただし spine の先頭が表紙であることはほぼ確実なので、そこから絵を取る。
+// ファイル名に cover が入っているかで探すより確か（別の画像に当たりようがない）。
+async function coverFromFirstSection(book) {
+  try {
+    const s = book?.sections?.[0]
+    if (!s) return null
+    const url = await s.load()
+    if (!url) return null
+    const item = book?.resources?.manifest?.find(i => i.href === s.id)
+    // spine が画像を直接指す本（OMF）は、章のロード結果が絵そのもの。
+    if ((item?.mediaType || '').toLowerCase().startsWith('image/')) {
+      return await (await fetch(url)).blob()
+    }
+    // XHTML の表紙ページなら、その中の最初の絵を拾う（resource は blob URL に置換済み）。
+    const html = await (await fetch(url)).text()
+    const doc = new DOMParser().parseFromString(html, 'application/xhtml+xml')
+    const src = imageSrcOf(doc)
+    if (!src) return null
+    return await (await fetch(src)).blob()
+  } catch (e) {
+    return null      // 表紙が無いのは致命ではない。メタデータだけで登録する。
+  }
+}
+
 // ---- 書棚登録用: メタデータ＋表紙だけ取り出す（描画しない）----
 async function probeBook() {
   try {
@@ -853,7 +1214,7 @@ async function probeBook() {
     const md = book?.metadata || {}
     let coverB64 = null
     try {
-      const cover = await book?.getCover?.()
+      const cover = (await book?.getCover?.()) || (await coverFromFirstSection(book))
       if (cover) {
         coverB64 = await new Promise((resolve, reject) => {
           const fr = new FileReader()
@@ -942,6 +1303,18 @@ function ttsClearHighlight() {
   }
 }
 
+// 表示の強制の現在値。Swift 側のツールバー表示を実際の状態と合わせるために返す。
+function displayState() {
+  return {
+    binding: State.forcedBinding,
+    bookDir: State.bookDir,
+    imageSpread: State.imageSpread,
+    textSpread: State.textSpread,
+    aspect: State.forcedAspect,
+    detectedAspect: State.detectedAspect,
+  }
+}
+
 // Swift から呼ぶ API。値は JSON 文字列で返す（evaluateJavaScript の戻り値として受ける）。
 window.__reader = {
   open: (json) => { openBook(json ? JSON.parse(json) : {}) },
@@ -987,6 +1360,42 @@ window.__reader = {
     imagePage: State.imagePage ?? null,
     index: State.index,
   }),
+
+  // 表示の強制（綴じ方向・見開き・アスペクト比）をまとめて差し替える。
+  // 送られてきたキーだけを変える（readDisplayOverrides 参照）ので、
+  // ツールバーの1項目だけを切り替えるときも他は現状のままになる。
+  setDisplay: (json) => {
+    const opts = json ? JSON.parse(json) : {}
+    const beforeBinding = State.forcedBinding
+    const beforeText = State.textSpread
+    readDisplayOverrides(opts)
+
+    // 綴じ方向は本全体の向きへ即座に反映する。次の relocate を待つと、切り替えた直後の
+    // 1回だけ左右タップが逆を向く。
+    if (State.forcedBinding !== 'auto') {
+      State.bookDir = State.forcedBinding
+      State.bookDirConfirmed = true
+    } else if (beforeBinding !== 'auto') {
+      // 自動へ戻した。OPF の暫定値まで巻き戻して、いま見えている面から測り直す。
+      State.bookDirConfirmed = false
+      State.bookDir = opfPageDirection(State.view?.book) === 'rtl' ? 'rtl' : 'ltr'
+      const doc = currentContents()?.doc
+      if (doc) noteSectionDirection(doc)
+    }
+
+    const doc = currentContents()?.doc
+    if (State.textSpread !== beforeText) applyTextSpread(doc, { rerender: true })
+
+    // 画像面は組み方・並び順・比率のどれが変わっても描き直す。
+    hideImageLayer()                    // State.imagePage も落ちるので組み直しになる
+    if (isFriendly() && doc && detectImagePage(doc)) {
+      setTimeout(() => applySpread(doc, State.index), 0)
+    } else if (isFriendly()) {
+      fitImages(doc)                    // 本文中の挿絵にも比率の強制が効く
+    }
+    return JSON.stringify(displayState())
+  },
+  displayState: () => JSON.stringify(displayState()),
   goLeft: () => State.view?.goLeft?.(),
   goRight: () => State.view?.goRight?.(),
   goToFraction: (f) => State.view?.goToFraction?.(f),

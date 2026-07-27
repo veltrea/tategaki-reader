@@ -16,3 +16,6 @@ scratchpad/
 
 # SwiftPM lockfile（*.resolved 誤検出回避・再生成される）
 **/Package.resolved
+
+# scripts/run.sh がワークツリーごとに決めるテストバスのポート（機械が書く）
+.testbus-port

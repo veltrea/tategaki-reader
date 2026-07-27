@@ -142,6 +142,8 @@ struct ShelfView: View {
                 authorIndexView
             }
         }
+        // 書棚全体の地。最後に読んだ本のカバーを弱くぼかして敷く（スクロールしても動かない）。
+        .background { ShelfBackdrop(image: backdropBook.flatMap { model.coverImage(for: $0) }) }
         .task { model.backfillMetadataIfNeeded() }
         #if DEBUG
         .task {
@@ -176,10 +178,16 @@ struct ShelfView: View {
         }
     }
 
-    /// 「続きを読む」段に出す本＝最後に読んだ（＝最後に開いた）1冊。
+    /// 最後に読んだ（＝最後に開いた）1冊。段の主役であり、書棚の地に敷くカバーの持ち主。
+    /// 絞り込みに左右されない（地が検索のたびに入れ替わると落ち着かないため）。
+    private var backdropBook: BookEntry? {
+        model.books.max(by: { $0.lastOpenedAt < $1.lastOpenedAt })
+    }
+
+    /// 「続きを読む」段に出す本。
     /// 絞り込み中は、その結果に含まれるときだけ出す（無関係な本が段に残らないように）。
     private var continueBook: BookEntry? {
-        guard let latest = model.books.max(by: { $0.lastOpenedAt < $1.lastOpenedAt }),
+        guard let latest = backdropBook,
               filteredBooks.contains(where: { $0.id == latest.id })
         else { return nil }
         return latest
@@ -309,6 +317,10 @@ struct ShelfView: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 14)
+        // 地のカバーがそのまま透けるとツールバーが書棚と溶けて境目が消える。かといって
+        // 完全な不透明も浮くので、地色をほぼ塗り潰す濃さで敷き、カバーをわずかに透かす。
+        // マテリアルではなく実数の不透明度なのは、透け具合をここで確実に決めたいため。
+        .background(Color(uiColor: .systemBackground).opacity(0.74))
     }
 
     private var noMatchState: some View {
@@ -344,8 +356,33 @@ struct ShelfView: View {
     }
 }
 
+/// 書棚全体の地。最後に読んだ本のカバーを敷き、弱くぼかす（Kindle のトップと同じ狙い）。
+/// 「何の本か分かる程度」に留めたいので、ぼかしは弱め・上に地色を薄く重ねて文字を読めるようにする。
+private struct ShelfBackdrop: View {
+    let image: UIImage?
+
+    var body: some View {
+        ZStack {
+            Color(uiColor: .systemBackground)
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    // opaque: true でにじみの縁が透けないようにする。
+                    .blur(radius: 20, opaque: true)
+                    .opacity(0.55)
+                // カバーの明暗に関わらずラベル色が読めるよう、地色を薄く被せる。
+                Color(uiColor: .systemBackground).opacity(0.3)
+            }
+        }
+        // aspectRatio(.fill) で枠より大きく広がるので、書棚の枠で切る。
+        .clipped()
+        .ignoresSafeArea()
+    }
+}
+
 /// 書棚の最上段。最後に読んだ1冊だけを大きく扱い、そこから読書へ復帰できるようにする。
-/// 背景はその本のカバーを大きくぼかして敷く（Kindle のトップと同じ狙い）。
+/// 地は書棚全体の背景（ShelfBackdrop）に任せ、この段は自前の背景を持たない。
 private struct ContinueReadingBanner: View {
     let book: BookEntry
     let image: UIImage?
@@ -357,18 +394,17 @@ private struct ContinueReadingBanner: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(book.title)
                     .font(.title2.bold())
-                    .foregroundStyle(.white)
                     .lineLimit(2)
                 if !book.authorText.isEmpty {
                     Text(book.authorText)
                         .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.75))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 if let pct = book.progressPercent {
                     Text("\(pct)% 読了")
                         .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.75))
+                        .foregroundStyle(.secondary)
                 }
                 Button(book.hasStartedReading ? "続きを読む" : "読み始める", action: open)
                     .buttonStyle(.borderedProminent)
@@ -384,10 +420,6 @@ private struct ContinueReadingBanner: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background { backdrop }
-        // 地のカバーは aspectRatio(.fill) で段より大きく広がるので、段の枠で切る
-        //（切らないと下のグリッドまでぼかしが漏れる）。
-        .clipped()
     }
 
     private var cover: some View {
@@ -397,16 +429,13 @@ private struct ContinueReadingBanner: View {
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {
-                LinearGradient(
-                    colors: [Color(white: 0.28), Color(white: 0.16)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                )
+                DefaultCover()
                 Text(book.title)
                     .font(.caption.bold())
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
                     .lineLimit(4)
-                    .padding(10)
+                    .padding(.horizontal, 18)
             }
         }
         .frame(width: 130, height: 190)
@@ -416,26 +445,6 @@ private struct ContinueReadingBanner: View {
         .onTapGesture { if book.fileExists { open() } }
     }
 
-    /// カバーを引き伸ばしてぼかした地。カバーが無い本は暗いグラデーションで代替。
-    @ViewBuilder
-    private var backdrop: some View {
-        ZStack {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    // opaque: true でにじみの縁が透けないようにする。
-                    .blur(radius: 44, opaque: true)
-                Color.black.opacity(0.42)
-            } else {
-                LinearGradient(
-                    colors: [Color(white: 0.22), Color(white: 0.10)],
-                    startPoint: .top, endPoint: .bottom
-                )
-            }
-        }
-        .clipped()
-    }
 }
 
 /// 書棚の1セル（カバー + タイトル）。
@@ -502,16 +511,39 @@ private struct BookCell: View {
 
     private var placeholder: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color(white: 0.28), Color(white: 0.16)],
-                startPoint: .topLeading, endPoint: .bottomTrailing
-            )
+            DefaultCover()
             Text(book.title)
                 .font(.caption.bold())
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
                 .lineLimit(4)
                 .padding(10)
+                // 装丁の罫の内側に収める（罫にかかると読みにくい）。
+                .padding(.horizontal, 8)
+        }
+    }
+}
+
+/// 表紙を持たない本のための、アプリ同梱の代替表紙。
+///
+/// EPUB には表紙が「無いのが正しい」本がある——青空文庫由来の短編や、変換で表紙を落とした本、
+/// そもそも本文が文字だけで画像を1枚も含まない本。そういう本を無地の矩形で並べると
+/// 書棚が抜け落ちて見えるので、装丁を模した絵を敷いてタイトルを乗せる。
+///
+/// 画像は Assets の "DefaultCover"（800x1200 @2x）。読めなかったときのために、
+/// 同じ配色のグラデーションへ落ちる（アセットの取りこぼしで書棚が真っ白にならないよう）。
+struct DefaultCover: View {
+    var body: some View {
+        if let image = UIImage(named: "DefaultCover") {
+            Image(uiImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            LinearGradient(
+                colors: [Color(red: 0.145, green: 0.184, blue: 0.251),
+                         Color(red: 0.071, green: 0.094, blue: 0.133)],
+                startPoint: .top, endPoint: .bottom
+            )
         }
     }
 }

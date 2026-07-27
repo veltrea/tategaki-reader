@@ -29,6 +29,7 @@
 """
 import argparse
 import json
+import os
 import socket
 import sys
 import time
@@ -37,7 +38,9 @@ import axdriver as ax
 from ApplicationServices import kAXChildrenAttribute
 
 APP = "EpubReaderSpike"
-BUS_HOST, BUS_PORT = "127.0.0.1", 47831
+BUS_HOST = "127.0.0.1"
+# ポートは axdriver と同じく EPUB_TEST_BUS_PORT で振り分けられる（並行作業での混線防止）。
+BUS_PORT = ax.TESTBUS_PORT
 INTERACTIVE = {"AXButton", "AXSlider", "AXPopUpButton", "AXTextField", "AXCheckBox"}
 
 

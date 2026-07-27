@@ -39,6 +39,17 @@ targets:
         CFBundleLocalizations:
           - ja
           - en
+        # Finder で .epub をダブルクリック（/「このアプリケーションで開く」）したときに
+        # このアプリが開けるよう、扱えるドキュメント型として EPUB を宣言する。
+        # org.idpf.epub-container はシステム定義の UTI なので、独自宣言(UTImportedTypeDeclarations)は不要。
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: EPUB
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Default
+            LSItemContentTypes:
+              - org.idpf.epub-container
+        # 開いた本をコピーせず元の場所のまま読む（読書位置の保存先も実パスで一意になる）。
+        LSSupportsOpeningDocumentsInPlace: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.veltrea.EpubReaderSpike

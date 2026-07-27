@@ -21,6 +21,9 @@ struct ReaderScreen: View {
     @State private var showCSSEditor = false
     /// 読み上げ音声の保存先フォルダ選択ピッカーの表示。
     @State private var showSaveFolderPicker = false
+    /// 強制アスペクト比の手入力（"844:1200" 形式）。
+    @State private var showAspectInput = false
+    @State private var aspectDraft = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -58,12 +61,11 @@ struct ReaderScreen: View {
                         onRegisterDictionary: { reader.requestDictionaryRegister(surface: $0) },
                         onDoubleTap: { reader.startSpeakingFromSelection() },
                         onDropEPUB: { model.open(url: $0) },
-                        onPage: { forward in Task { await reader.pageStep(forward: forward) } },
+                        onPageSide: { side in Task { await reader.pageStep(side: side) } },
                         onHover: { point, height in
                             reader.updateContentPointer(y: point?.y, viewHeight: height)
                         },
                         onShortcut: { reader.handleShortcut($0) },
-                        isRTL: reader.isRTL,
                         columnPitch: reader.columnPitch,
                         pageBackground: ReaderModel.pageBackgroundColor(theme: model.settings.theme)
                     )
@@ -127,6 +129,18 @@ struct ReaderScreen: View {
         .sheet(isPresented: $reader.showSettings) {
             SettingsView(model: model, reader: reader)
         }
+        // 強制アスペクト比の手入力。判型が拾えない本や、拾えた値が実際と違う本のため。
+        .alert("画像の比率を固定", isPresented: $showAspectInput) {
+            TextField("例: 844:1200", text: $aspectDraft)
+            Button("固定する") {
+                if let a = AspectRatio(storageString: aspectDraft) { reader.setForcedAspect(a) }
+            }
+            Button("固定しない", role: .destructive) { reader.setForcedAspect(nil) }
+            Button("キャンセル", role: .cancel) { }
+        } message: {
+            Text("「幅:高さ」で指定します。指定した比率へ画像を引き伸ばすので、"
+                 + "元の比率と違う面は歪みます。")
+        }
         // 読み上げ音声の保存先フォルダを選ぶ（App Sandbox 無効なので選んだパスをそのまま利用）。
         .fileImporter(
             isPresented: $showSaveFolderPicker,
@@ -170,12 +184,16 @@ struct ReaderScreen: View {
         }
     }
 
+    /// 上下パネルの地。本文が透けすぎるとアイコンと文字が読み取れないので、
+    /// regular より不透明な thick を使う（漫画の白地・黒ベタの上でも輪郭が残る）。
+    private static let chromeMaterial: Material = .thickMaterial
+
     /// 上バー（書棚に戻る・タイトル・各種操作）。ポインタが上端に寄ったときだけ出す。
     private var topChrome: some View {
         VStack(spacing: 0) {
             if reader.chromeTop {
                 topBar
-                    .background(.regularMaterial)
+                    .background(Self.chromeMaterial)
                 Divider()
             }
             Color.clear
@@ -197,7 +215,7 @@ struct ReaderScreen: View {
             if reader.showsBottomChrome {
                 Divider()
                 progressBar
-                    .background(.regularMaterial)
+                    .background(Self.chromeMaterial)
                 Divider()
                 ttsControls
             }
@@ -261,6 +279,13 @@ struct ReaderScreen: View {
             .help(reader.renderMode == .raw
                 ? "EPUB のまま表示中（押すと読みやすさ優先へ）"
                 : "読みやすさ優先で表示中（押すと EPUB のままへ）")
+            // 表示の強制（綴じ方向・見開き・比率）。どれも本のデータからは正しく決められない
+            // ものなので、押せばすぐ変わり、長押しで明示的に選べる形にしてある。
+            // 値は本ごとに覚えるので、次に開いたときも同じ見え方になる。
+            bindingButton
+            imageSpreadButton
+            textSpreadButton
+            aspectButton
             // 固定レイアウトに限らず、画像ページを見開きで組んでいる本でも使う。
             if reader.isFixedLayout || reader.currentPageIsImage {
                 Button { reader.toggleSpreadOffset() } label: {
@@ -347,6 +372,125 @@ struct ReaderScreen: View {
         .imageScale(.large)
     }
 
+    // MARK: 表示の強制（ワンタッチ切替）
+    //
+    // どのボタンも「押す＝次の値へ巡回」「長押し＝一覧から選ぶ」。Menu の primaryAction は
+    // タップを奪ってメニューを開かせないので、この二段構えが1つのボタンで成立する。
+
+    /// 綴じ方向（自動 → 右綴じ → 左綴じ → 自動）。
+    private var bindingButton: some View {
+        Menu {
+            Picker("綴じ方向", selection: Binding(
+                get: { reader.bindingDirection },
+                set: { reader.setBindingDirection($0) }
+            )) {
+                ForEach(BindingDirection.allCases) { d in
+                    Label(d.label, systemImage: d.symbolName).tag(d)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: reader.bindingDirection.symbolName)
+        } primaryAction: {
+            reader.setBindingDirection(reader.bindingDirection.next)
+        }
+        .help(bindingHelp)
+    }
+
+    /// 自動のときは「いま何と判定されているか」まで出す（自動が当たっているか一目で分かる）。
+    private var bindingHelp: String {
+        let resolved = reader.bookIsRTL
+            ? String(localized: "右綴じ") : String(localized: "左綴じ")
+        return reader.bindingDirection == .auto
+            ? String(format: String(localized: "綴じ方向: 自動（いまは%@）"), resolved)
+            : String(format: String(localized: "綴じ方向: %@（固定）"), reader.bindingDirection.label)
+    }
+
+    /// 画像ページの見開き（自動 → 常に見開き → 常に単ページ → 自動）。
+    private var imageSpreadButton: some View {
+        Menu {
+            Picker("画像の見開き", selection: Binding(
+                get: { reader.imageSpread },
+                set: { reader.setImageSpread($0) }
+            )) {
+                ForEach(SpreadMode.allCases) { m in
+                    Label(m.label, systemImage: m.symbolName(forImages: true)).tag(m)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: reader.imageSpread.symbolName(forImages: true))
+        } primaryAction: {
+            reader.setImageSpread(reader.imageSpread.next)
+        }
+        .help(String(format: String(localized: "画像ページの見開き: %@"), reader.imageSpread.label))
+    }
+
+    /// 本文の見開き（自動 → 常に見開き → 常に単ページ → 自動）。
+    private var textSpreadButton: some View {
+        Menu {
+            Picker("本文の見開き", selection: Binding(
+                get: { reader.textSpread },
+                set: { reader.setTextSpread($0) }
+            )) {
+                ForEach(SpreadMode.allCases) { m in
+                    Label(m.label, systemImage: m.symbolName(forImages: false)).tag(m)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: reader.textSpread.symbolName(forImages: false))
+        } primaryAction: {
+            reader.setTextSpread(reader.textSpread.next)
+        }
+        .help(String(format: String(localized: "本文の見開き: %@"), reader.textSpread.label))
+    }
+
+    /// アスペクト比の強制。押すと「本の判型で固定」⇄「解除」。長押しで判型を選ぶ。
+    /// 本から判型を拾えなかったときは、押しても何も起きないので既定値を先頭に出す。
+    private var aspectButton: some View {
+        Menu {
+            Button {
+                reader.setForcedAspect(nil)
+            } label: {
+                Label("固定しない", systemImage: "aspectratio")
+            }
+            if let detected = reader.detectedAspect {
+                Section("この本の判型") {
+                    Button {
+                        reader.setForcedAspect(detected)
+                    } label: {
+                        Label(detected.label, systemImage: "sparkle.magnifyingglass")
+                    }
+                }
+            }
+            Section("判型を選ぶ") {
+                ForEach(AspectRatio.presets, id: \.storageString) { preset in
+                    Button(preset.label) { reader.setForcedAspect(preset) }
+                }
+            }
+            Section {
+                Button {
+                    aspectDraft = (reader.forcedAspect ?? reader.detectedAspect)?.storageString ?? ""
+                    showAspectInput = true
+                } label: {
+                    Label("任意の比率…", systemImage: "square.and.pencil")
+                }
+            }
+        } label: {
+            Image(systemName: reader.forcedAspect == nil ? "aspectratio" : "aspectratio.fill")
+        } primaryAction: {
+            // 押したときは「本の判型で固定」と「解除」を往復する。判型が拾えていない本では
+            // 往復させようがないので、メニューから選んでもらう。
+            if reader.forcedAspect != nil { reader.setForcedAspect(nil) }
+            else if let detected = reader.detectedAspect { reader.setForcedAspect(detected) }
+            else { showAspectInput = true }
+        }
+        .help(reader.forcedAspect.map {
+            String(format: String(localized: "比率を %@ に固定中"), $0.label)
+        } ?? String(localized: "画像の比率を固定する（引き伸ばし）"))
+    }
+
     private var ttsControls: some View {
         // ボタン群だけを中央に固定する。status を同じ HStack に入れると
         // 文字数の増減で HStack 全幅が変わり、アイコンの中心位置がずれてしまう。
@@ -364,7 +508,7 @@ struct ReaderScreen: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
-            .background(.regularMaterial)
+            .background(Self.chromeMaterial)
     }
 
     private var ttsButtons: some View {
@@ -433,6 +577,13 @@ struct ReaderScreen: View {
     }
 }
 
+/// ページ送りの入力方向。「進む/戻る」ではなく「押された向き」を表す。
+/// 左右は書字方向によって進む/戻るのどちらにもなるので、解決は ReaderModel に一本化する
+/// （`ReaderModel.pageStep(side:)`）。上下は向きに依らないのでそのまま進む/戻る。
+enum PageSide {
+    case left, right, next, previous
+}
+
 // MARK: - foliate WebView を SwiftUI に載せるホスト
 // ページ送り入力（ホイール・矢印キー・ダブルクリック）は bridge.js が iframe 内で処理する。
 // ここはネイティブ層の責務だけ持つ: 左右タップゾーン・測定グリッド・EPUB の D&D・列フィットインセット。
@@ -444,16 +595,17 @@ final class DictionaryHostViewController: UIViewController {
     var selectionText: (() -> String)?
     /// ウィンドウへ EPUB がドロップされたときのコールバック（リーダー表示中の D&D 用）。
     var onDropEPUB: ((URL) -> Void)?
-    /// 1画面ページ送り（forward=true で次へ）。タップゾーン・矢印キーから呼ぶ。
-    var onPage: ((Bool) -> Void)?
+    /// 1画面ページ送りの要求。渡すのは「押された向き」だけで、進む/戻るへの解決は
+    /// ReaderModel が本単位の書字方向で行う。ビュー側に向きを持たせない設計にしてあるのは、
+    /// SwiftUI 経由で流し込む値は反映が1フレーム遅れることがあり、その隙に押されると
+    /// 左右が逆に解決されるため。タップゾーン・矢印キーから呼ぶ。
+    var onPageSide: ((PageSide) -> Void)?
     /// 読み上げのキー操作（"playPause" / "stop"）。本文にフォーカスが無くても効くように、
     /// bridge.js の keydown だけでなくレスポンダチェーンからも拾う。
     var onShortcut: ((String) -> Void)?
     /// ポインタのホバー位置（このビューの座標系）とビュー高さ。操作パネルの自動表示に使う。
     /// 位置 nil はホバー終了。
     var onHover: ((CGPoint?, CGFloat) -> Void)?
-    /// 右→左読み（縦書き等）。左右タップ/矢印の「進む/戻る」判定に使う。
-    var isRTL: Bool = false
     /// デバッグ用の測定グリッド（ネイティブ層・WKWebView の上に半透明で重ねる）。
     private lazy var measureGrid: MeasurementGridView = {
         let g = MeasurementGridView()
@@ -556,10 +708,11 @@ final class DictionaryHostViewController: UIViewController {
         // 左端タップ=視覚的に左へ。RTL(縦書き)では左=進む、LTR では左=戻る。
         // ページ送りは scroll モードの章内送りに対応するため onPage(pageStep) 経由にする
         //（navigator.goLeft/goRight だと章を丸ごと跨いで章内が飛ぶ）。
+        // 進む/戻るへの解決はここではやらない（ReaderModel が本単位の書字方向で決める）。
         let left = PageTapZone(icon: "chevron.left")
         let right = PageTapZone(icon: "chevron.right")
-        left.onTap = { [weak self] in guard let self else { return }; self.onPage?(self.isRTL) }
-        right.onTap = { [weak self] in guard let self else { return }; self.onPage?(!self.isRTL) }
+        left.onTap = { [weak self] in self?.onPageSide?(.left) }
+        right.onTap = { [weak self] in self?.onPageSide?(.right) }
         for z in [left, right] {
             // タップゾーンが hit-test を取る領域でもホバー位置を親へ流す（パネル自動表示用）。
             z.onHoverMove = { [weak self] point in
@@ -588,7 +741,7 @@ final class DictionaryHostViewController: UIViewController {
 
     // MARK: - 矢印キーでのページ送り
     // WebView にフォーカスが無いときのフォールバック（フォーカス時は bridge.js の keydown が処理）。
-    // 左=isRTLで進む / 右=その逆 / 下=進む / 上=戻る（縦書き・横書き双方で自然な向き）。
+    // 左右は書字方向で解決（ReaderModel 側）／下=進む / 上=戻る（向きに依らず自然な向き）。
     override var keyCommands: [UIKeyCommand]? {
         [
             UIKeyCommand(input: UIKeyCommand.inputLeftArrow, modifierFlags: [], action: #selector(pageLeft)),
@@ -616,10 +769,10 @@ final class DictionaryHostViewController: UIViewController {
         }
     }
 
-    @objc private func pageLeft() { onPage?(isRTL) }
-    @objc private func pageRight() { onPage?(!isRTL) }
-    @objc private func pageDown() { onPage?(true) }
-    @objc private func pageUp() { onPage?(false) }
+    @objc private func pageLeft() { onPageSide?(.left) }
+    @objc private func pageRight() { onPageSide?(.right) }
+    @objc private func pageDown() { onPageSide?(.next) }
+    @objc private func pageUp() { onPageSide?(.previous) }
 
     // MARK: - 右クリック（選択メニュー）の「読み上げ辞書に登録」
     // WKWebView の選択メニューへの項目追加は buildMenu(with:) で行う
@@ -885,15 +1038,13 @@ private struct NavigatorContainer: UIViewControllerRepresentable {
     let onDoubleTap: () -> Void
     /// リーダー表示中に EPUB がドロップされたとき（ウィンドウ D&D 継続用）。
     var onDropEPUB: (URL) -> Void = { _ in }
-    /// 1画面ページ送り（forward=true で次へ）。タップゾーン・矢印から呼ぶ。
-    var onPage: (Bool) -> Void = { _ in }
+    /// 1画面ページ送りの要求（押された向き）。タップゾーン・矢印から呼ぶ。
+    var onPageSide: (PageSide) -> Void = { _ in }
     /// ポインタのホバー位置（本文ビュー座標）とビュー高さ。操作パネルの自動表示に使う。
     /// point=nil はホバー終了（ポインタがパネル上／ウィンドウ外へ出た）。
     var onHover: (CGPoint?, CGFloat) -> Void = { _, _ in }
     /// 読み上げのキー操作（"playPause" / "stop"）。
     var onShortcut: (String) -> Void = { _ in }
-    /// 右→左読み（縦書き等）。左右タップ/矢印の向き判定に使う。
-    var isRTL: Bool = false
     /// 旧 Readium 用の列ピッチ。foliate は正規ページネーションのため未使用（常に0）。
     var columnPitch: CGFloat = 0
     /// テーマの地色。reader（bind 前は nil の model 経由）ではなくビューから直接受け取る。
@@ -907,10 +1058,9 @@ private struct NavigatorContainer: UIViewControllerRepresentable {
         host.onRegister = onRegisterDictionary
         host.selectionText = { [weak reader] in reader?.selectedText ?? "" }
         host.onDropEPUB = onDropEPUB
-        host.onPage = onPage
+        host.onPageSide = onPageSide
         host.onShortcut = onShortcut
         host.onHover = onHover
-        host.isRTL = isRTL
         host.setColumnPitch(columnPitch, isImagePage: isImagePage)
         host.setMeasurementGrid(showMeasureGrid)
         host.setPageBackground(pageBackground)
@@ -918,10 +1068,9 @@ private struct NavigatorContainer: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ vc: DictionaryHostViewController, context: Context) {
-        vc.onPage = onPage
+        vc.onPageSide = onPageSide
         vc.onShortcut = onShortcut
         vc.onHover = onHover
-        vc.isRTL = isRTL
         vc.setColumnPitch(columnPitch, isImagePage: isImagePage)
         vc.setMeasurementGrid(showMeasureGrid)
         // 露出する地肌を本文背景と揃える（テーマ変更にも追従・開いた瞬間の白ちらつき防止）。
@@ -984,19 +1133,31 @@ final class ReaderModel: NSObject, ObservableObject {
     @Published var isSavingVideo: Bool = false
     /// 本全体での現在位置（0...1）。スライダー・%表示に使う。
     @Published var progression: Double = 0
-    /// 右→左読み。左右タップ・矢印キーの向きをこれで決める。
-    /// 判定は bridge の pageDirection（実際に組まれた本文の向き）。spine の
+    /// 右→左読み。判定は bridge の pageDirection（実際に組まれた本文の向き）。spine の
     /// page-progression-direction は当てにならないので見ていない。
     /// **これは章ごとの値**（縦書きの本でも前付け・目次・奥付は横組み）。relocate のたびに
     /// 更新され、いま画面に組まれているものと必ず一致する。
+    /// 用途は「いま組まれている向き」を知りたいところだけ（動画の縦横・状態表示）。
+    /// **ページ送りの左右にこれを使ってはいけない**（理由は bookIsRTL 側に記載）。
     @Published var isRTL: Bool = false
-    /// 本全体としての右→左読み。**進捗スライダーの鏡像だけ**はこちらを使う。
-    /// 章ごとの isRTL で鏡像化すると、前付けと本文を行き来するたびに摘みが左右へ飛ぶ。
+    /// 本全体としての右→左読み。**進捗スライダーの鏡像と、左右タップ・矢印キーの向き**は
+    /// こちらを使う。章ごとの isRTL で向きを決めると、前付け（横組み）と本文（縦組み）を
+    /// 行き来するたびに同じ左タップの意味が進む⇄戻るへ反転し、表紙と本文1ページ目を
+    /// 往復するだけで奥付へ永久に到達できなくなる（青空文庫の EPUB で実際に踏んだ）。
     @Published var bookIsRTL: Bool = false
     /// 本文が縦書きで組まれているか（動画の縦横・UI表示用）。isRTL 同様、章ごとの値。
     @Published var isVertical: Bool = false
     /// 適用中の書字方向（自動 / 強制縦書き / 強制横書き）。
     @Published var writingMode: WritingMode = .auto
+    /// 適用中の綴じ方向の指定（自動 / 右綴じ / 左綴じ）。実際に効いている向きは bookIsRTL。
+    @Published var bindingDirection: BindingDirection = .auto
+    /// 適用中の見開き指定（画像ページ／本文）。
+    @Published var imageSpread: SpreadMode = .auto
+    @Published var textSpread: SpreadMode = .auto
+    /// 強制中のアスペクト比（nil = 強制しない）。
+    @Published var forcedAspect: AspectRatio?
+    /// この本から拾えたアスペクト比（メニューの「本の判型」に出す既定値）。
+    @Published var detectedAspect: AspectRatio?
     /// 表示モード。既定は読みやすさ優先の friendly。raw は EPUB の指定を確かめる用。
     @Published var renderMode: RenderMode = .friendly
     /// この本の OPF が主張する書字方向（"vertical"/"horizontal"/nil）。自動時の表示補足用。
@@ -1178,7 +1339,11 @@ final class ReaderModel: NSObject, ObservableObject {
                 writingMode = m
             }
             isFixedLayout = (body["fixedLayout"] as? Bool) ?? false
+            applyDisplayState(body)
             loadTOC()
+        case "display":
+            // 本の判型を画像から拾い直せたときなど、開いた後に届く表示状態の更新。
+            applyDisplayState(body)
         case "shortcut":
             // 本文ビュー上のキー操作（スペース=再生／一時停止、Return・Esc=停止）。
             if let action = body["action"] as? String { handleShortcut(action) }
@@ -1225,9 +1390,113 @@ final class ReaderModel: NSObject, ObservableObject {
         // ツールバーのアイコンが実際の表示と食い違わないよう、開く前に状態も揃えておく。
         renderMode = RenderMode(rawValue: model?.settings.renderMode ?? "") ?? .friendly
         opts["renderMode"] = renderMode.rawValue
+        // 表示の強制もこの本に保存されている値で開く。とくに綴じ方向は最初の組版より前に
+        // 決まっていないと、開いた直後の1ページだけ左右タップが逆を向く。
+        bindingDirection = model?.bindingDirection(for: bookID) ?? .auto
+        imageSpread = model?.imageSpread(for: bookID) ?? .auto
+        textSpread = model?.textSpread(for: bookID) ?? .auto
+        forcedAspect = model?.forcedAspect(for: bookID)
+        opts["binding"] = bindingDirection.rawValue
+        opts["imageSpread"] = imageSpread.rawValue
+        opts["textSpread"] = textSpread.rawValue
+        if let a = forcedAspect { opts["aspect"] = ["w": a.width, "h": a.height] }
         Task {
             await engine.call("window.__reader.open(\(FoliateEngine.jsonArg(opts)))")
             pushStyle()
+        }
+    }
+
+    // MARK: 表示の強制（綴じ方向・見開き・アスペクト比）
+
+    /// JS から届いた表示状態をモデルへ写す。ツールバーの見た目を実際の状態に合わせるため、
+    /// 変更を投げた後の戻り値でも同じ経路を通す。
+    private func applyDisplayState(_ body: [String: Any]) {
+        if let raw = body["binding"] as? String, let d = BindingDirection(rawValue: raw) {
+            bindingDirection = d
+        }
+        if let raw = body["imageSpread"] as? String, let m = SpreadMode(rawValue: raw) {
+            imageSpread = m
+        }
+        if let raw = body["textSpread"] as? String, let m = SpreadMode(rawValue: raw) {
+            textSpread = m
+        }
+        if let bd = body["bookDir"] as? String { bookIsRTL = (bd == "rtl") }
+        forcedAspect = Self.aspect(from: body["aspect"])
+        if let detected = Self.aspect(from: body["detectedAspect"]) { detectedAspect = detected }
+    }
+
+    /// JS の {w, h} を AspectRatio に読み替える。
+    private static func aspect(from value: Any?) -> AspectRatio? {
+        guard let d = value as? [String: Any],
+              let w = (d["w"] as? NSNumber)?.doubleValue,
+              let h = (d["h"] as? NSNumber)?.doubleValue,
+              w > 0, h > 0 else { return nil }
+        return AspectRatio(width: w, height: h)
+    }
+
+    /// 綴じ方向を変える。本ごとに記憶し、次に開いたときも同じ向きになる。
+    func setBindingDirection(_ direction: BindingDirection) {
+        guard bindingDirection != direction else { return }
+        bindingDirection = direction
+        if let bookID { model?.setBindingDirection(bookID: bookID, direction: direction) }
+        pushDisplay(["binding": direction.rawValue])
+        status = String(format: String(localized: "綴じ方向: %@"), direction.label)
+    }
+
+    /// 画像ページの見開きを変える。本ごとに記憶する。
+    func setImageSpread(_ mode: SpreadMode) {
+        guard imageSpread != mode else { return }
+        imageSpread = mode
+        if let bookID { model?.setImageSpread(bookID: bookID, mode: mode) }
+        pushDisplay(["imageSpread": mode.rawValue])
+        status = String(format: String(localized: "画像の見開き: %@"), mode.label)
+    }
+
+    /// 本文の見開きを変える。本ごとに記憶する。
+    func setTextSpread(_ mode: SpreadMode) {
+        guard textSpread != mode else { return }
+        textSpread = mode
+        if let bookID { model?.setTextSpread(bookID: bookID, mode: mode) }
+        pushDisplay(["textSpread": mode.rawValue])
+        status = String(format: String(localized: "本文の見開き: %@"), mode.label)
+    }
+
+    /// 強制アスペクト比を変える（nil で強制解除）。本ごとに記憶する。
+    func setForcedAspect(_ aspect: AspectRatio?) {
+        forcedAspect = aspect
+        if let bookID { model?.setForcedAspect(bookID: bookID, aspect: aspect) }
+        let payload: Any = aspect.map { ["w": $0.width, "h": $0.height] } ?? NSNull()
+        pushDisplay(["aspect": payload])
+        status = aspect.map { String(format: String(localized: "比率を %@ に固定"), $0.label) }
+            ?? String(localized: "比率の固定を解除")
+    }
+
+    /// 全書籍の既定が変わったときに、この本へ適用すべき値を取り直す。
+    /// 本ごとの上書きを持つ本は既定に引きずられない（model 側の getter が解決する）。
+    func refreshDisplayOverridesFromSettings() {
+        guard let model else { return }
+        var patch: [String: Any] = [:]
+        let binding = model.bindingDirection(for: bookID)
+        if binding != bindingDirection { bindingDirection = binding; patch["binding"] = binding.rawValue }
+        let image = model.imageSpread(for: bookID)
+        if image != imageSpread { imageSpread = image; patch["imageSpread"] = image.rawValue }
+        let text = model.textSpread(for: bookID)
+        if text != textSpread { textSpread = text; patch["textSpread"] = text.rawValue }
+        guard !patch.isEmpty else { return }
+        pushDisplay(patch)
+    }
+
+    /// 表示の強制を JS へ渡し、返ってきた実際の状態をモデルへ写す。
+    /// 綴じ方向は最初の組版より前にも必要なので、開くときの opts でも同じ値を渡している。
+    private func pushDisplay(_ patch: [String: Any]) {
+        guard engineReady else { return }
+        Task {
+            let raw = await engine.call(
+                "window.__reader.setDisplay(\(FoliateEngine.jsonArg(patch)))")
+            guard let s = raw as? String, let data = s.data(using: .utf8),
+                  let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return }
+            applyDisplayState(body)
         }
     }
 
@@ -1319,6 +1588,23 @@ final class ReaderModel: NSObject, ObservableObject {
     func pageStep(forward: Bool) async {
         guard engineReady else { return }
         await engine.call(forward ? "window.__reader.next()" : "window.__reader.prev()")
+    }
+
+    /// 押された向きからページ送りする。左右の「進む/戻る」解決はここが唯一の実装。
+    ///
+    /// 判定に使うのは **本単位の bookIsRTL**。章ごとの isRTL を使うと、縦書きの本でも
+    /// 横組みで作られている表紙・前付け・奥付にいる間だけ左右の意味が反転し、
+    /// 表紙と本文1ページ目を往復するだけで奥付へ到達できなくなる
+    /// （青空文庫の『吾輩は猫である』上篇自序で実際に発生）。
+    func pageStep(side: PageSide) async {
+        let forward: Bool
+        switch side {
+        case .left:     forward = bookIsRTL
+        case .right:    forward = !bookIsRTL
+        case .next:     forward = true
+        case .previous: forward = false
+        }
+        await pageStep(forward: forward)
     }
 
     /// スライダー等からのシーク。本全体の割合(0...1)へジャンプ。

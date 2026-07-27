@@ -425,6 +425,9 @@ export class Paginator extends HTMLElement {
     static observedAttributes = [
         'flow', 'gap', 'margin',
         'max-inline-size', 'max-block-size', 'max-column-count',
+        // bridge.js のパッチ: 本文の見開きを強制するために、縦長画面用の列数も
+        // 外から差し替えられるようにする（既定は #top の --_max-column-count-portrait: 1）。
+        'max-column-count-portrait',
     ]
     #root = this.attachShadow({ mode: 'closed' })
     #observer = new ResizeObserver(() => this.render())
@@ -634,6 +637,7 @@ export class Paginator extends HTMLElement {
             case 'margin':
             case 'max-block-size':
             case 'max-column-count':
+            case 'max-column-count-portrait':
                 this.#top.style.setProperty('--_' + name, value)
                 break
             case 'max-inline-size':

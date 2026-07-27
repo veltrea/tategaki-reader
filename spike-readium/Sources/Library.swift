@@ -22,6 +22,15 @@ struct BookEntry: Identifiable, Codable, Equatable {
     var customCSS: String?
     /// この本だけの書字方向（nil = 全書籍の既定に従う）。WritingMode の rawValue。
     var writingMode: String?
+    /// この本だけの綴じ方向（nil = 全書籍の既定に従う）。BindingDirection の rawValue。
+    var bindingDirection: String?
+    /// この本だけの画像ページの見開き（nil = 全書籍の既定に従う）。SpreadMode の rawValue。
+    var imageSpread: String?
+    /// この本だけの本文の見開き（nil = 全書籍の既定に従う）。SpreadMode の rawValue。
+    var textSpread: String?
+    /// この本だけの強制アスペクト比（nil = 強制しない）。"844:1200" 形式。
+    /// 本によって正しい値が違うので、これだけは全書籍の既定を持たない。
+    var forcedAspect: String?
     /// 作者・出版社（EPUB メタデータから抽出。旧データ互換のため optional）。
     var author: String?
     var publisher: String?
@@ -91,17 +100,28 @@ struct ReadingSettings: Codable, Equatable {
     var writingMode: String = WritingMode.auto.rawValue
     /// 表示モード。RenderMode を参照。
     var renderMode: String = RenderMode.friendly.rawValue
+    /// 全書籍の既定の綴じ方向。本ごとの指定（BookEntry.bindingDirection）が優先される。
+    var bindingDirection: String = BindingDirection.auto.rawValue
+    /// 全書籍の既定の見開き（画像ページ／本文）。本ごとの指定が優先される。
+    var imageSpread: String = SpreadMode.auto.rawValue
+    var textSpread: String = SpreadMode.auto.rawValue
 
     init(fontSize: Double = 1.0, lineHeight: Double = 1.8,
          theme: String = "light", language: String = "auto",
          writingMode: String = WritingMode.auto.rawValue,
-         renderMode: String = RenderMode.friendly.rawValue) {
+         renderMode: String = RenderMode.friendly.rawValue,
+         bindingDirection: String = BindingDirection.auto.rawValue,
+         imageSpread: String = SpreadMode.auto.rawValue,
+         textSpread: String = SpreadMode.auto.rawValue) {
         self.fontSize = fontSize
         self.lineHeight = lineHeight
         self.theme = theme
         self.language = language
         self.writingMode = writingMode
         self.renderMode = renderMode
+        self.bindingDirection = bindingDirection
+        self.imageSpread = imageSpread
+        self.textSpread = textSpread
     }
 
     // 旧バージョン（fontSize/theme のみ）の保存データも欠損キーを既定で補って読めるようにする。
@@ -115,6 +135,12 @@ struct ReadingSettings: Codable, Equatable {
             ?? WritingMode.auto.rawValue
         renderMode = try c.decodeIfPresent(String.self, forKey: .renderMode)
             ?? RenderMode.friendly.rawValue
+        bindingDirection = try c.decodeIfPresent(String.self, forKey: .bindingDirection)
+            ?? BindingDirection.auto.rawValue
+        imageSpread = try c.decodeIfPresent(String.self, forKey: .imageSpread)
+            ?? SpreadMode.auto.rawValue
+        textSpread = try c.decodeIfPresent(String.self, forKey: .textSpread)
+            ?? SpreadMode.auto.rawValue
     }
 }
 
@@ -159,6 +185,134 @@ enum WritingMode: String, CaseIterable, Identifiable {
         case .horizontal: return "text.alignleft"
         }
     }
+}
+
+/// 綴じ方向（ページを送っていく向き）。
+///
+/// 自動判定には二つの穴があり、どちらも本のデータだけでは埋まらない。
+/// ひとつは spine の page-progression-direction が横組みへ変換された本にも rtl のまま
+/// 残っていること。もうひとつは漫画・写真集のように本文が画像だけの本で、
+/// 組まれた文字が無いので向きを実測しようがないこと。読み手が本ごとに決められるようにする。
+enum BindingDirection: String, CaseIterable, Identifiable {
+    case auto    // 本の指定と本文の実測から決める
+    case rtl     // 右綴じ（日本の漫画・縦書きの本）
+    case ltr     // 左綴じ（洋書・横組みの本）
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .auto: return String(localized: "自動")
+        case .rtl:  return String(localized: "右綴じ")
+        case .ltr:  return String(localized: "左綴じ")
+        }
+    }
+
+    /// ツールバーのアイコン。矢印は「ページが進んでいく向き」。
+    var symbolName: String {
+        switch self {
+        case .auto: return "arrow.left.arrow.right"
+        case .rtl:  return "arrow.left"
+        case .ltr:  return "arrow.right"
+        }
+    }
+
+    /// この順に押して巡回する（ワンタッチ切替用）。
+    var next: BindingDirection {
+        switch self {
+        case .auto: return .rtl
+        case .rtl:  return .ltr
+        case .ltr:  return .auto
+        }
+    }
+}
+
+/// 見開き（2ページを左右に並べる）の扱い。画像ページと本文とで別々に持つ。
+///
+/// auto は本の作りに任せる——画像側は「画像だけの面が続く区間を2枚ずつ組む」、
+/// 本文側は「エンジンの通常のページ組み（1画面1ページ）」。本の作りが粗くて
+/// 期待どおりに組まれないことがあるので、読み手が本ごとに倒せるようにする。
+enum SpreadMode: String, CaseIterable, Identifiable {
+    case auto     // 本の作りに任せる
+    case always   // 常に2ページ並べる
+    case never    // 常に1ページ
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .auto:   return String(localized: "自動")
+        case .always: return String(localized: "常に見開き")
+        case .never:  return String(localized: "常に単ページ")
+        }
+    }
+
+    /// ツールバーのアイコン。画像ページ用と本文用で絵柄を変える（隣に並ぶので、
+    /// 同じ絵だとどちらのボタンを押しているのか分からなくなる）。
+    func symbolName(forImages: Bool) -> String {
+        switch (self, forImages) {
+        case (.auto, true):    return "photo.on.rectangle"
+        case (.always, true):  return "photo.on.rectangle.angled"
+        case (.never, true):   return "photo"
+        case (.auto, false):   return "doc.on.doc"
+        case (.always, false): return "doc.on.doc.fill"
+        case (.never, false):  return "doc.plaintext"
+        }
+    }
+
+    /// この順に押して巡回する（ワンタッチ切替用）。
+    var next: SpreadMode {
+        switch self {
+        case .auto:   return .always
+        case .always: return .never
+        case .never:  return .auto
+        }
+    }
+}
+
+/// 画像を強制的に当てはめる縦横比（幅:高さ）。
+///
+/// 用途は「元データの比率がページごとに揃っていない本を揃える」こと。収めるのではなく
+/// **引き伸ばす**（object-fit: fill）ので、比率が違う面は歪む——それを承知で揃えたい
+/// ときのための機能である。既定値は本から拾う（EpubProbe/OPF の viewport や先頭画像の実寸）。
+struct AspectRatio: Codable, Equatable {
+    var width: Double
+    var height: Double
+
+    var isValid: Bool { width > 0 && height > 0 }
+    var value: Double { height > 0 ? width / height : 0 }
+
+    /// "844:1200" 形式。BookEntry へはこの形で保存する。
+    var storageString: String { "\(Int(width.rounded())):\(Int(height.rounded()))" }
+    var label: String { "\(Int(width.rounded())) : \(Int(height.rounded()))" }
+
+    init(width: Double, height: Double) {
+        self.width = width
+        self.height = height
+    }
+
+    /// "844:1200" / "3:4" / "1.5" を読む。読めなければ nil。
+    init?(storageString raw: String?) {
+        guard let raw = raw?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
+        let parts = raw.split(separator: ":", maxSplits: 1)
+        if parts.count == 2, let w = Double(parts[0]), let h = Double(parts[1]), w > 0, h > 0 {
+            self.init(width: w, height: h)
+        } else if let v = Double(raw), v > 0 {
+            // 比の値だけが入っている形（"1.5"）も受ける。
+            self.init(width: v, height: 1)
+        } else {
+            return nil
+        }
+    }
+
+    /// メニューに並べる定番の判型（縦長）。
+    static let presets: [AspectRatio] = [
+        AspectRatio(width: 2, height: 3),      // 文庫・新書に近い
+        AspectRatio(width: 3, height: 4),      // 漫画の単行本に多い
+        AspectRatio(width: 210, height: 297),  // A 判
+        AspectRatio(width: 182, height: 257),  // B5
+        AspectRatio(width: 1, height: 1),      // 正方形
+    ]
 }
 
 // MARK: - リーダーCSSの設定キー（foliate 版）
@@ -319,6 +473,64 @@ final class AppModel: ObservableObject {
     func setWritingMode(bookID: UUID, mode: WritingMode) {
         guard let idx = books.firstIndex(where: { $0.id == bookID }) else { return }
         books[idx].writingMode = (mode.rawValue == settings.writingMode) ? nil : mode.rawValue
+        save()
+    }
+
+    // MARK: 本別の表示の強制（綴じ方向・見開き・アスペクト比）
+    //
+    // どれも「本のデータからは正しく決められないので読み手が決める」ための上書きで、
+    // 本ごとに覚える。書字方向と同じく、既定と同じ値なら本別の指定は持たない
+    //（あとで既定を変えたときに追従させるため）。
+
+    func bindingDirection(for bookID: UUID?) -> BindingDirection {
+        if let id = bookID,
+           let raw = books.first(where: { $0.id == id })?.bindingDirection,
+           let d = BindingDirection(rawValue: raw) { return d }
+        return BindingDirection(rawValue: settings.bindingDirection) ?? .auto
+    }
+
+    func setBindingDirection(bookID: UUID, direction: BindingDirection) {
+        guard let idx = books.firstIndex(where: { $0.id == bookID }) else { return }
+        books[idx].bindingDirection =
+            (direction.rawValue == settings.bindingDirection) ? nil : direction.rawValue
+        save()
+    }
+
+    func imageSpread(for bookID: UUID?) -> SpreadMode {
+        if let id = bookID,
+           let raw = books.first(where: { $0.id == id })?.imageSpread,
+           let m = SpreadMode(rawValue: raw) { return m }
+        return SpreadMode(rawValue: settings.imageSpread) ?? .auto
+    }
+
+    func setImageSpread(bookID: UUID, mode: SpreadMode) {
+        guard let idx = books.firstIndex(where: { $0.id == bookID }) else { return }
+        books[idx].imageSpread = (mode.rawValue == settings.imageSpread) ? nil : mode.rawValue
+        save()
+    }
+
+    func textSpread(for bookID: UUID?) -> SpreadMode {
+        if let id = bookID,
+           let raw = books.first(where: { $0.id == id })?.textSpread,
+           let m = SpreadMode(rawValue: raw) { return m }
+        return SpreadMode(rawValue: settings.textSpread) ?? .auto
+    }
+
+    func setTextSpread(bookID: UUID, mode: SpreadMode) {
+        guard let idx = books.firstIndex(where: { $0.id == bookID }) else { return }
+        books[idx].textSpread = (mode.rawValue == settings.textSpread) ? nil : mode.rawValue
+        save()
+    }
+
+    /// 強制アスペクト比。本ごとにしか持たない（正しい値が本によって違うため）。
+    func forcedAspect(for bookID: UUID?) -> AspectRatio? {
+        guard let id = bookID else { return nil }
+        return AspectRatio(storageString: books.first(where: { $0.id == id })?.forcedAspect)
+    }
+
+    func setForcedAspect(bookID: UUID, aspect: AspectRatio?) {
+        guard let idx = books.firstIndex(where: { $0.id == bookID }) else { return }
+        books[idx].forcedAspect = (aspect?.isValid == true) ? aspect?.storageString : nil
         save()
     }
 

@@ -65,7 +65,8 @@ struct SettingsView: View {
         // preferredContentSize は Catalyst の iOS 座標系（≈0.77 倍で画面表示）で解釈されるため、
         // 目標の実寸 ≒ 幅478×高さ616 pt を得るには 0.77 の逆数を掛けた値を渡す（620×800）。
         // 実寸 ≒ 620×0.77=478、800×0.77=616。全11行(実測≒555pt)が余裕をもって収まる。
-        .background { CatalystSheetSizer(size: CGSize(width: 620, height: 800)) }
+        // 表示セクション（綴じ方向・見開き・アスペクト比）を足したぶん背を高くしてある。
+        .background { CatalystSheetSizer(size: CGSize(width: 700, height: 1180)) }
         .onAppear { display = model.settings }
         .task { await refreshEngine() }
         .fileImporter(
@@ -180,8 +181,23 @@ struct SettingsView: View {
                     Text(mode.label).tag(mode.rawValue)
                 }
             }
+            Picker("綴じ方向", selection: $display.bindingDirection) {
+                ForEach(BindingDirection.allCases) { d in
+                    Text(d.label).tag(d.rawValue)
+                }
+            }
+            Picker("画像ページの見開き", selection: $display.imageSpread) {
+                ForEach(SpreadMode.allCases) { m in
+                    Text(m.label).tag(m.rawValue)
+                }
+            }
+            Picker("本文の見開き", selection: $display.textSpread) {
+                ForEach(SpreadMode.allCases) { m in
+                    Text(m.label).tag(m.rawValue)
+                }
+            }
         } footer: {
-            Text("EPUB の縦書き指定は欠けていることが多いので、自動でうまくいかない本はリーダーの書字方向メニューで本ごとに上書きできます。表示モードを「EPUB のまま」にすると、画像の拡大・見開き・比率の補正を止めて、EPUB の指定がそのまま描かれた姿を確認できます。")
+            Text("EPUB の縦書き指定は欠けていることが多いので、自動でうまくいかない本はリーダーの書字方向メニューで本ごとに上書きできます。表示モードを「EPUB のまま」にすると、画像の拡大・見開き・比率の補正を止めて、EPUB の指定がそのまま描かれた姿を確認できます。綴じ方向と見開きはここが全書籍の既定で、リーダーのツールバーで切り替えるとその本だけの指定として覚えます。")
         }
     }
 
@@ -241,6 +257,8 @@ struct SettingsView: View {
         // 既定の書字方向を変えたときは、本ごとの上書きが無い本には即反映する
         //（組み直しが要るので applyDisplaySettings とは別経路）。
         reader?.refreshWritingModeFromSettings()
+        // 綴じ方向・見開きの既定も同じく、本ごとの上書きが無い本へ反映する。
+        reader?.refreshDisplayOverridesFromSettings()
         dismiss()
     }
 

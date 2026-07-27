@@ -47,6 +47,13 @@ struct RootView: View {
         .onDrop(of: [.epub, .fileURL], isTargeted: nil) { providers in
             handleDropped(providers)
         }
+        // Finder で .epub をダブルクリック／アプリのアイコンにドロップしたときの入口。
+        // Catalyst では起動時・起動中とも UIScene の openURLContexts 経由で届き、SwiftUI がここへ流す。
+        .onOpenURL { url in
+            dlog("[Open] onOpenURL \(url.absoluteString)")
+            guard url.isFileURL else { return }
+            model.open(url: url)
+        }
         .task { model.seedSampleIfNeeded() }
         #if DEBUG
         .task {

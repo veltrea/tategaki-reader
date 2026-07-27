@@ -15,6 +15,7 @@ AXUIElement で「要素ツリー読み取り / ボタン押下 / テキスト�
 依存: /usr/bin/python3（pyobjc 同梱）。外部パッケージ不要。
 注意: AX 呼び出しには Accessibility 権限が要る（この Python は許可済みを確認済み）。
 """
+import os
 import sys
 import json
 import socket
@@ -51,7 +52,23 @@ except Exception:  # 新しめの命名
     from ApplicationServices import kAXValueTypeCGSize as _AXV_CGSIZE
 
 DEFAULT_APP = "EpubReaderSpike"
-TESTBUS_PORT = 47831  # アプリ内 DEBUG テストバス（TestBus.swift と一致）
+# アプリ内 DEBUG テストバス（TestBus.swift と一致）。ワークツリーを分けて並行作業すると
+# 両方のビルドが同じポートを取り合い、テストが別のアプリに当たってしまうので、
+# 環境変数 EPUB_TEST_BUS_PORT で振り分けられるようにしてある（アプリ側も同じ変数を見る）。
+def _testbus_port() -> int:
+    raw = (os.environ.get("EPUB_TEST_BUS_PORT") or "").strip()
+    if not raw:
+        # scripts/run.sh がこのワークツリー用に決めた値（無ければ既定へ落ちる）。
+        here = os.path.dirname(os.path.abspath(__file__))
+        try:
+            with open(os.path.join(here, os.pardir, os.pardir, ".testbus-port")) as f:
+                raw = f.read().strip()
+        except OSError:
+            raw = ""
+    return int(raw) if raw.isdigit() and int(raw) >= 1024 else 47831
+
+
+TESTBUS_PORT = _testbus_port()
 
 
 class AXError(RuntimeError):
