@@ -13,6 +13,11 @@
 #   bash scripts/release.sh                # ビルド → 署名 → ZIP（dist/ に置くだけ）
 #   UPLOAD=1 bash scripts/release.sh       # 上に加えて GitHub Releases を作成
 #   TAG=v0.2.0 UPLOAD=1 bash scripts/release.sh
+#   REF=c432494 bash scripts/release.sh    # 過去のコミットから作り直す（配布物の復元）
+#
+# REF は「どのコミットから配布物を作るか」。既定は HEAD。公開済みバージョンの資材を
+# 作り直すときに使う（公開済みの版に、後から中身の違う .app を上書きしないため）。
+# バージョンは REF のツリーの project.yml から読む＝作業ツリーの版に引きずられない。
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,9 +29,7 @@ ok()   { printf '\033[1;32m[OK]\033[0m %s\n' "$*" >&2; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
 err()  { printf '\033[1;31m[X]\033[0m %s\n' "$*" >&2; }
 
-VERSION="$(awk -F'"' '/MARKETING_VERSION:/ {print $2}' "$REPO/spike-readium/project.yml")"
-[ -n "$VERSION" ] || { err "MARKETING_VERSION を project.yml から読めません"; exit 1; }
-TAG="${TAG:-v$VERSION}"
+REF="${REF:-HEAD}"
 
 # ビルド木はリポジトリと同じボリュームに置く。$TMPDIR は起動ディスクにあり、
 # Xcode のビルド（数 GB）が入らずに ENOSPC で落ちることがある（実際に落ちた）。
@@ -49,10 +52,15 @@ cleanup() {
 trap cleanup EXIT
 
 # --- 1. HEAD を書き出す ---------------------------------------------------
-say "HEAD を書き出し: $(git -C "$REPO" log -1 --format='%h %s')"
+say "書き出し: $(git -C "$REPO" log -1 --format='%h %s' "$REF")"
 dirty="$(git -C "$REPO" status --porcelain --untracked-files=all | wc -l | tr -d ' ')"
 [ "$dirty" != "0" ] && warn "未コミットの変更が $dirty 件あります。配布物には入りません。"
-git -C "$REPO" archive --format=tar HEAD | tar -x -C "$EXPORT"
+git -C "$REPO" archive --format=tar "$REF" | tar -x -C "$EXPORT"
+
+# バージョンは書き出したツリーから読む（REF を指定したときに作業ツリーの版が混ざらない）。
+VERSION="$(awk -F'"' '/MARKETING_VERSION:/ {print $2}' "$EXPORT/spike-readium/project.yml")"
+[ -n "$VERSION" ] || { err "MARKETING_VERSION を project.yml から読めません"; exit 1; }
+TAG="${TAG:-v$VERSION}"
 
 # --- 2. Release 構成でビルド ----------------------------------------------
 # Debug ではなく Release。TestBus（#if DEBUG）は 127.0.0.1 で待ち受けるので、
