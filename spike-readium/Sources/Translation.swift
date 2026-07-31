@@ -278,12 +278,17 @@ actor TranslationCache {
     private static let limit = 4000
     private var order: [String] = []
 
-    private var fileURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("EpubReaderSpike", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return base.appendingPathComponent("translation-cache.json")
-    }
+    /// 訳の貯め先。**書棚ごとに分ける**（原文がそのまま入るので、別の書棚を見せているときに
+    /// 手元の蔵書の本文が対訳ペインへ出てこないように）。
+    private var fileURL: URL { ProfileLocation.shared.translationCacheURL }
+
+    /// いま抱えている訳が**どの書棚のものか**。
+    ///
+    /// 書き出しはまとめて（2秒ぶん）行うので、書棚を切り替えた直後に書き出しが走ると
+    /// `fileURL` は既に新しい書棚を指している——**前の書棚の原文がそのまま新しい書棚の
+    /// ファイルへ移ってしまう**。読んだ／書き足した時点の場所を控えておき、書き出しは必ず
+    /// そこへ向ける。
+    private var origin: URL?
 
     /// （モデル・訳先言語・原文）からキーを作る。原文は長いので SHA256 に畳む。
     nonisolated static func key(model: String, target: String, text: String) -> String {
@@ -310,10 +315,25 @@ actor TranslationCache {
 
     /// 全消去（設定シートの「訳のキャッシュを消す」用）。
     func clear() {
+        saveTask?.cancel()
+        saveTask = nil
         map = [:]
         order = []
         loaded = true
+        origin = fileURL
         try? FileManager.default.removeItem(at: fileURL)
+    }
+
+    /// 書棚を切り替えたときに、抱えている訳を手放す（次に要るときは新しい書棚から読み直す）。
+    /// 溜めている書き込みは**元の書棚のファイルへ書き切ってから**捨てる。
+    func detach() {
+        saveTask?.cancel()
+        saveTask = nil
+        if loaded, let origin { flush(to: origin) }
+        map = [:]
+        order = []
+        loaded = false
+        origin = nil
     }
 
     func count() -> Int {
@@ -324,7 +344,9 @@ actor TranslationCache {
     private func loadIfNeeded() {
         guard !loaded else { return }
         loaded = true
-        guard let data = try? Data(contentsOf: fileURL),
+        let url = fileURL
+        origin = url
+        guard let data = try? Data(contentsOf: url),
               let obj = try? JSONDecoder().decode([String: String].self, from: data)
         else { return }
         map = obj
@@ -333,17 +355,18 @@ actor TranslationCache {
 
     /// 書き込みは束ねる（段落ごとに数百件の I/O を出さない）。
     private func scheduleSave() {
+        let target = origin ?? fileURL
         saveTask?.cancel()
         saveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard !Task.isCancelled else { return }
-            await self?.flush()
+            await self?.flush(to: target)
         }
     }
 
-    private func flush() {
+    private func flush(to url: URL) {
         guard let data = try? JSONEncoder().encode(map) else { return }
-        try? data.write(to: fileURL, options: .atomic)
+        try? data.write(to: url, options: .atomic)
     }
 }
 

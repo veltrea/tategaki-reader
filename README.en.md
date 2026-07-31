@@ -57,6 +57,16 @@ TTS engines' own user dictionaries have no mechanism to control this, so this ap
 
 Regular-expression substitution (patterns like `第(\d+)話`) is supported as well.
 
+## Separate shelves
+
+A personal library holds books you would rather not show anyone: material entrusted to you for work, books you keep away from family, books that have nothing to do with whoever is watching your screen.
+
+So you can keep **more than one shelf** (File > Switch Shelf). Switching swaps the whole thing: book list, collections, favorites, reading positions, bookmarks, covers, reading dictionary, and shared CSS. Machine-level settings such as the speech engine connection stay shared.
+
+This is deliberately not a "hide the books I don't want seen" feature. Hiding leaks the moment you miss one path — forgetting to turn it back on, a cover left in the in-memory cache, the cover painted behind the shelf. If you switch what the app reads instead, anything it isn't reading cannot be displayed. For screenshots, keep a shelf holding only books you are free to publish.
+
+The EPUB files themselves are shared across shelves, and deleting a shelf never deletes the files.
+
 ## Export
 
 - **Per-chapter audio files** — listen to your own novel on the commute, or check a collaborative work in spare moments
@@ -69,7 +79,7 @@ The video generation part is also available standalone as a browser-only tool un
 One of this project's core concepts is **end-to-end automated testing driven through MCP**. If you're interested in GUI test automation, this is a small, working sample you can actually run.
 
 - **No coordinate clicking** — UI elements are located by name through the Accessibility (AX) API. No dependence on eyeballing screenshots, on bringing windows to the front, or on notification banners not covering things
-- **In-app test bus** — DEBUG builds embed a JSONL-over-TCP command server ([`TestBus.swift`](spike-readium/Sources/TestBus.swift)). State changes and checks that are awkward to reach through the UI become one-line commands
+- **In-app command bus** — a JSONL-over-TCP command server is built in ([`TestBus.swift`](spike-readium/Sources/TestBus.swift)). State changes and checks that are awkward to reach through the UI become one-line commands. **Editing and verifying the reading dictionary (`dictAdd` / `applyRules`) is open in release builds too**, so lining up dozens of compounds can be handed to an AI agent (every other command stays DEBUG-only)
 - **Assert on numbers** — instead of "it looks off," `ui_overflow` reports "this button overflows the frame by 12.3pt to the right." No visual screenshot comparison
 - **A test runs in seconds**
 
@@ -82,7 +92,7 @@ The methodology itself is documented under `docs/`.
 
 ## Download
 
-Prebuilt apps live on the [Releases](https://github.com/veltrea/tategaki-reader/releases) page. Unpack the ZIP and drop `EpubReaderSpike.app` into `/Applications`.
+Prebuilt apps live on the [Releases](https://github.com/veltrea/tategaki-reader/releases) page. Open the DMG and drag `EpubReaderSpike.app` into `Applications` (0.2.0 and earlier shipped as a ZIP).
 
 The app is **ad-hoc signed** — no Apple Developer account ($99/year) involved — so macOS asks you to confirm the first launch.
 
@@ -130,8 +140,6 @@ MIT License — see [LICENSE](LICENSE).
 
 For the third-party code bundled here (foliate-js, pdf.js, fflate), see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-## About the author
+## Contact
 
-I work as a freelance developer. Japanese typesetting, ebook tooling, and GUI test automation are the areas I know well.
-
-If this repository was useful to you and you think we might work well together, feel free to reach out through [Issues](../../issues). I would be glad to hear from you.
+Noticed something, or ran into trouble? Open an [issue](../../issues).

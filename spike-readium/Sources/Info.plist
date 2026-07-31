@@ -45,6 +45,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>スリープタイマーで指定した時間が過ぎたあと、Mac をシャットダウンするために使います。 シャットダウンを選ばない限り、この許可は使いません。</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

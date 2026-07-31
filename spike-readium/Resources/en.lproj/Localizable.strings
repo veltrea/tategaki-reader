@@ -4,8 +4,37 @@
 "本がありません" = "No books";
 "「本を追加」または EPUB をウィンドウにドラッグ＆ドロップ" = "Tap “Add Book” or drag & drop an EPUB onto the window.";
 "書棚から削除" = "Remove from Library";
+"「本を追加」または EPUB やフォルダをウィンドウにドラッグ＆ドロップ" = "Tap “Add Book”, or drag & drop EPUBs or folders onto the window.";
+"フォルダは中の EPUB をまとめて登録します（サブフォルダも探します）" = "Folders are scanned for EPUBs, including subfolders.";
+"該当する本がありません" = "No matching books";
+"フィルタ条件を変えてください" = "Try different filter conditions";
+"%@冊" = "%@ books";
+"作者の読みを設定…" = "Set Author Reading…";
 "読み込み中…" = "Loading…";
 "開く…" = "Open…";
+"サイドバーの表示" = "Show Sidebar";
+
+/* 書棚のサイドバー・分類 / Shelf sidebar & collections */
+"すべての本" = "All Books";
+"お気に入り" = "Favorites";
+"未分類" = "Unfiled";
+"分類" = "Collections";
+"新しい分類…" = "New Collection…";
+"新しい分類" = "New Collection";
+"分類の名前" = "Collection name";
+"作成" = "Create";
+"最上位に分類を作る" = "Create a top-level collection";
+"この中に分類を作る…" = "New Collection Inside…";
+"分類の名前を変更" = "Rename Collection";
+"名前を変更…" = "Rename…";
+"最上位へ移動" = "Move to Top Level";
+"分類を削除" = "Delete Collection";
+"分類がありません" = "No collections";
+"お気に入りに追加" = "Add to Favorites";
+"お気に入りから外す" = "Remove from Favorites";
+"新しい分類に入れる…" = "Add to New Collection…";
+"この分類にはまだ本が入っていません" = "This collection has no books yet";
+"本を分けてしまうための棚です。あとから入れ子にもできます。" = "A shelf for grouping books. You can nest collections later.";
 
 /* リーダー操作 / Reader controls */
 "見開きをずらす" = "Shift Spread";
@@ -109,3 +138,40 @@
 "目次" = "Contents";
 "この本には目次がありません。" = "This book has no table of contents.";
 "（無題）" = "(untitled)";
+
+/* 自動ページ送り / Auto page turn */
+"自動ページ送り" = "Auto Page Turn";
+"自動ページ送りを止める" = "Stop Auto Page Turn";
+"%lld秒ごとに送る" = "Every %lld seconds";
+"間隔を指定…" = "Custom Interval…";
+"あと %@ 秒で次のページ" = "Next page in %@ s";
+"あと %@ 秒" = "%@ s left";
+"読み上げ中は送りません" = "Paused while reading aloud";
+"何秒ごとに次のページへ進むかを秒で入力してください。" = "Enter how many seconds to wait before turning to the next page.";
+"本の終わりです（自動ページ送りを停止）" = "End of book — auto page turn stopped";
+"停止中" = "Off";
+"秒" = "sec";
+"自動ページ送り: %lld秒ごと" = "Auto page turn: every %lld s";
+"自動ページ送りを停止" = "Auto page turn stopped";
+
+/* 書棚（プロファイル）の切り替えと管理 / Shelf profiles */
+"書棚を切り替える" = "Switch Shelf";
+"書棚を管理…" = "Manage Shelves…";
+"書棚の管理" = "Manage Shelves";
+"自分の書棚" = "My Shelf";
+"蔵書の一覧・分類・お気に入り・読書位置・しおり・表紙・読み辞書・全書籍共通CSSは書棚ごとに分かれます。読み上げエンジンの接続先や表示の既定値は共通です。EPUBファイル自体は書棚を消しても消えません。" = "Each shelf keeps its own book list, collections, favorites, reading positions, bookmarks, covers, reading dictionary, and shared CSS. The speech engine connection and display defaults are shared. Deleting a shelf never deletes the EPUB files themselves.";
+"新しい書棚" = "New Shelf";
+"名前" = "Name";
+"追加" = "Add";
+"中身は空で始まります（同梱サンプルも入りません）。" = "It starts out empty — not even the bundled samples.";
+"書棚の名前" = "Shelf Name";
+"表示中" = "Showing";
+"切り替える" = "Switch";
+"名前を変える…" = "Rename…";
+"消す…" = "Delete…";
+"消す" = "Delete";
+"最初からある書棚は消せません" = "The original shelf can't be deleted";
+"表示中の書棚は消せません" = "The shelf you're viewing can't be deleted";
+"この書棚を消しますか？" = "Delete this shelf?";
+"登録した本の一覧・分類・読書位置が見えなくなります（EPUBファイルは消えません）。取り違えたときに戻せるよう、データ自体は消さずに残します。" = "Its book list, collections, and reading positions will no longer be visible (the EPUB files stay put). The data itself is kept, not erased, so you can get it back if you delete the wrong one.";
+"書棚「%@」に切り替えました" = "Switched to the shelf “%@”";

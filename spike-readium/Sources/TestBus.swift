@@ -1,16 +1,21 @@
-#if DEBUG
 import Foundation
 import Network
+import UniformTypeIdentifiers
 
-/// DEBUG 限定の UI テスト用コマンドバス。
+/// アプリを外から駆動するコマンドバス。
 ///
-/// 目的: Accessibility(AX) では駆動できない操作（SwiftUI の .contextMenu 限定アクション等）を、
-/// 外部テスト（epub-test MCP / axdriver.py）から「本物のアプリのアクション」として実行し、
-/// かつモデルの真の状態を JSON で取得できるようにする。
+/// 目的は二つある。
+///  1. UI テスト: Accessibility(AX) では駆動できない操作（SwiftUI の .contextMenu 限定アクション等）を、
+///     外部テスト（epub-test MCP / axdriver.py）から「本物のアプリのアクション」として実行し、
+///     かつモデルの真の状態を JSON で取得する。
+///  2. 読み辞書の自動化: 熟語を数十件登録して読みを合わせる作業は手では割に合わない。
+///     AI エージェントに「登録して、`applyRules` で読み上げに渡る文字列を見て検算する」を
+///     回させるため、**辞書まわりだけはリリースビルドでも開けてある**（下の `releaseCommands`）。
 ///
 /// 実装: 127.0.0.1:47831 に JSONL(1行1 JSON) の TCP サーバを立てる。
 /// 1リクエスト = 1行の JSON、1レスポンス = 1行の JSON。ハンドラは main で走る。
-/// リリースビルドには一切含まれない（#if DEBUG）。
+/// 待ち受けはループバックのみ。リリースビルドで受け付けるコマンドは辞書まわりに限る
+///（本の一覧やパス、書棚の切り替え、電源操作まで外から触れると、書棚を分けている意味がなくなるため）。
 ///
 /// コマンド例:
 ///   {"cmd":"ping"}
@@ -43,12 +48,26 @@ final class TestBus {
         return 47831
     }()
 
+    /// リリースビルドでも受け付けるコマンド。
+    ///
+    /// 読み辞書は「熟語を数十件そろえて初めて意図どおりに読める」たぐいの機能で、手で入れるには
+    /// 割に合わない。だからここだけは開発ビルドに閉じ込めず、配布版でも外から編集・検算できる。
+    /// 逆に、蔵書の一覧・パス・書棚の切り替え・電源操作・本文への eval は開発ビルド限定のままにする。
+    /// ローカルの別プロセスなら誰でもこの口を叩けるので、配布版で開ける範囲は
+    /// 「今の書棚の読み辞書」と「その適用結果」に限る。
+    static let releaseCommands: Set<String> = [
+        "ping", "dictList", "dictAdd", "dictUpdate", "dictDelete", "setRules", "applyRules",
+    ]
+
     /// 対象モデル（App 起動時に注入）。
     weak var model: AppModel?
     /// 現在開いているリーダー（ReaderScreen 表示時に注入）。計りレイヤー/測定に使う。
     weak var reader: ReaderModel?
     /// 実アラート（作者の読み）を開くためのビュー側フック（ShelfView が登録）。
     var openYomiEditor: ((BookEntry) -> Void)?
+    /// 書棚に「いま実際に出ている本」（絞り込み・並び替え後）。ShelfView が登録する。
+    /// モデルの `books(in:)` と別に持つのは、画面に出ている結果そのものを確かめるため。
+    var shelfSnapshot: (() -> [(UUID, String)])?
 
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "testbus.tcp")
@@ -123,6 +142,9 @@ final class TestBus {
         [
             "id": b.id.uuidString,
             "title": b.title,
+            // 取り込みの検証で「どのファイルが入ったか」を突き合わせるために要る
+            //（同じ本の複製はタイトルが同じで見分けられない）。DEBUG 限定のバス越しのみ。
+            "path": b.path,
             "author": b.authorText,
             "authorSort": b.authorSort ?? NSNull(),
             "authorYomi": b.authorYomi ?? NSNull(),
@@ -131,7 +153,89 @@ final class TestBus {
         ]
     }
 
+    /// スリープタイマーの状態（残り秒・満了時の動作・要求された電源操作）。
+    /// `power` は「実際に要求された電源操作」で、実操作 OFF のときは記録だけが入る＝
+    /// テストはここを見て「シャットダウンまで到達したか」を Mac を落とさずに検証できる。
+    @MainActor
+    private func sleepTimerState(_ t: SleepTimer) -> [String: Any] {
+        [
+            "active": t.isActive,
+            "remaining": Int(t.remaining.rounded()),
+            "action": t.action.rawValue,
+            "shutdownCountdown": t.shutdownCountdown.map { Int($0.rounded()) } ?? NSNull(),
+            // 電源操作を「記録だけ」に差し替える逃げ道は開発ビルドにしか無い（配布版は常に実操作）。
+            "realPower": Self.realPowerFlag(t),
+            "power": t.recordingPower.lastRequest ?? NSNull(),
+        ]
+    }
+
+    @MainActor
+    private static func realPowerFlag(_ t: SleepTimer) -> Bool {
+        #if DEBUG
+        return t.performsRealPowerAction
+        #else
+        return true
+        #endif
+    }
+
+    /// 書棚（プロファイル）の一覧と、いま見ている書棚の保存先。
+    ///
+    /// パスまで返すのは、「切り替えたつもりで前の書棚のファイルを読み書きしている」類の
+    /// 取り違えが画面からは見えないため（最初からある書棚だけ保存先が root 直下という
+    /// 分岐があるので、そこを実測で押さえておきたい）。
+    @MainActor
+    private func profileDump(_ model: AppModel) -> [String: Any] {
+        [
+            "current": model.currentProfileID.uuidString,
+            "list": model.profiles.map { p in
+                [
+                    "id": p.id.uuidString,
+                    "name": p.name,
+                    "primary": p.isPrimary,
+                    "removable": model.canRemoveProfile(p.id),
+                ] as [String: Any]
+            },
+            "libraryPath": ProfileLocation.shared.libraryFileURL.path,
+            "coversPath": ProfileLocation.shared.coversDirectory.path,
+            "cssKey": EpubOpener.userCSSKey,
+            "dictKey": ReadingDictionaryStore.key,
+        ]
+    }
+
+    /// 書棚の指定（id / name）。名前は一意とは限らないので、最初に見つけたものを返す。
+    @MainActor
+    private func resolveProfile(_ cmd: [String: Any], _ model: AppModel) -> UUID? {
+        if let raw = cmd["id"] as? String, let id = UUID(uuidString: raw),
+           model.profiles.contains(where: { $0.id == id }) {
+            return id
+        }
+        if let name = cmd["name"] as? String {
+            return model.profiles.first { $0.name == name }?.id
+        }
+        return nil
+    }
+
+    /// 自動ページ送りの状態（稼働中か・次の送りまでの残り秒・間隔・読み上げ中で見送っているか）。
+    @MainActor
+    private func autoPagerState(_ p: AutoPager) -> [String: Any] {
+        [
+            "running": p.isRunning,
+            "remaining": Int(p.remaining.rounded()),
+            "seconds": p.seconds,
+            "holding": p.isHolding,
+        ]
+    }
+
     /// title_contains / title / id いずれかで本を1冊特定。
+    /// 分類の指定（id / name）。名前は書棚の中で一意とは限らないので、最初に見つけたものを返す。
+    private func matchCollection(_ cmd: [String: Any],
+                                 _ all: [ShelfCollection]) -> ShelfCollection? {
+        if let id = cmd["collection"] as? String,
+           let found = all.first(where: { $0.id.uuidString == id }) { return found }
+        if let n = cmd["collection_name"] as? String { return all.first { $0.name == n } }
+        return nil
+    }
+
     private func match(_ cmd: [String: Any], _ books: [BookEntry]) -> BookEntry? {
         if let id = cmd["id"] as? String { return books.first { $0.id.uuidString == id } }
         if let t = cmd["title"] as? String { return books.first { $0.title == t } }
@@ -143,8 +247,17 @@ final class TestBus {
     private func handle(_ cmd: [String: Any]) async -> [String: Any] {
         let name = (cmd["cmd"] as? String) ?? ""
 
+        #if !DEBUG
+        // 配布版で開けてあるのは読み辞書まわりだけ（`releaseCommands` の説明を参照）。
+        guard Self.releaseCommands.contains(name) else {
+            return ["ok": false, "error": "command not available in this build: \(name)"]
+        }
+        #endif
+
         // 計りレイヤー/測定はリーダー（WebView）に対する操作。model 非依存。
         switch name {
+        #if DEBUG
+        // 計りレイヤーの注入と本文への eval は開発ビルド限定（本文 WebView に任意の JS を通すため）。
         case "overlayOn":
             guard let reader else { return ["ok": false, "error": "reader not attached (open a book first)"] }
             await reader.showMeasureOverlay()
@@ -164,6 +277,7 @@ final class TestBus {
             let js = (cmd["js"] as? String) ?? ""
             let out = await reader.evalJS(js)
             return ["ok": true, "result": out]
+        #endif
         case "bookmarkSelection":
             // 本文の右クリック「しおりを追加」と同じ経路。選択は eval で作っておく
             //（右クリックメニュー自体は合成イベントで開けないため、経路だけを検証する）。
@@ -190,10 +304,12 @@ final class TestBus {
             let f = (cmd["fraction"] as? NSNumber)?.doubleValue ?? 0
             await reader.seek(to: f)
             return ["ok": true, "fraction": f]
+        #if DEBUG
         case "goForward", "goBackward":
             guard let reader else { return ["ok": false, "error": "reader not attached (open a book first)"] }
             await reader.testTurnPage(forward: name == "goForward")
             return ["ok": true]
+        #endif
         case "tapLeft", "tapRight", "tapDown", "tapUp":
             // 左右端タップゾーン／矢印キーと同じ経路（押された向き → ReaderModel が
             // 本単位の書字方向で進む/戻るを解決）。goForward/goBackward は解決済みの
@@ -503,18 +619,221 @@ final class TestBus {
         case "state":
             return ["ok": true, "books": model.books.map { dump($0) }]
 
+        #if DEBUG
         case "menuDump":
             // メニュー識別子の実物（AppDelegate.buildMenu が組んだ直後の姿）。
             return ["ok": true, "items": AppDelegate.menuDump]
+        #endif
+
+        // MARK: 書棚（プロファイル）
+        // 保存先も返す。「切り替えたのに前の書棚のファイルを読んでいる」類の取り違えは
+        // 画面からは見えないので、パスを突き合わせて確かめられるようにしてある。
+        case "profiles":
+            return ["ok": true, "profiles": profileDump(model)]
+
+        case "switchProfile":
+            guard let target = resolveProfile(cmd, model) else {
+                return ["ok": false, "error": "profile not found"]
+            }
+            model.switchProfile(to: target)
+            // 蔵書の読み込みと表紙キャッシュの破棄が済むまで1呼吸置く。
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            return ["ok": true, "profiles": profileDump(model), "books": model.books.count]
+
+        case "addProfile":
+            guard let name = cmd["name"] as? String,
+                  let created = model.addProfile(name: name) else {
+                return ["ok": false, "error": "name is empty"]
+            }
+            return ["ok": true, "id": created.id.uuidString, "profiles": profileDump(model)]
+
+        // 新しい名前は "to" で受ける（"name" は対象を探すのに使うので、同じ鍵に二役やらせない）。
+        case "renameProfile":
+            guard let target = resolveProfile(cmd, model),
+                  let next = cmd["to"] as? String, model.renameProfile(target, to: next) else {
+                return ["ok": false, "error": "rename failed"]
+            }
+            return ["ok": true, "profiles": profileDump(model)]
+
+        case "removeProfile":
+            guard let target = resolveProfile(cmd, model) else {
+                return ["ok": false, "error": "profile not found"]
+            }
+            guard model.removeProfile(target) else {
+                return ["ok": false, "error": "not removable (primary or current)"]
+            }
+            return ["ok": true, "profiles": profileDump(model)]
+
+        // 開閉の両方をここから起こせるようにしてある（シートの「閉じる」は
+        // ToolbarItem(.confirmationAction) で AX に現れず、テストから閉じる手が無くなる）。
+        case "openProfileManager":
+            model.showProfileManager = true
+            return ["ok": true]
+
+        case "closeProfileManager":
+            model.showProfileManager = false
+            return ["ok": true]
+
+        // MARK: スリープタイマー
+        // 電源操作は既定で「記録だけ」（SleepTimer.performsRealPowerAction=false）なので、
+        // ここから満了させてもテスト機は落ちない。実操作の確認は sleepTimerRealPower で明示的に入れる。
+        case "sleepTimerStart":
+            let t = model.sleepTimer
+            if let raw = cmd["action"] as? String {
+                guard let a = SleepTimerAction(rawValue: raw) else {
+                    return ["ok": false, "error": "unknown action: \(raw)"]
+                }
+                t.action = a
+            }
+            // 秒指定（fire までの待ち時間を縮めたいテスト用）も受ける。
+            // start(minutes:) は通さない（「前回指定した分数」をテストの都合で汚さない）。
+            if let sec = (cmd["seconds"] as? NSNumber)?.doubleValue, sec > 0 {
+                t.startForTest(seconds: sec)
+            } else {
+                t.start(minutes: (cmd["minutes"] as? NSNumber)?.intValue ?? 30)
+            }
+            return ["ok": true, "state": sleepTimerState(t)]
+
+        case "sleepTimerCancel":
+            model.sleepTimer.cancel()
+            return ["ok": true, "state": sleepTimerState(model.sleepTimer)]
+
+        case "sleepTimerFire":
+            // 締め切りを現在へ引き寄せて満了させる（待たずに満了時の挙動を検証する）。
+            let t = model.sleepTimer
+            guard t.deadline != nil else { return ["ok": false, "error": "timer not running"] }
+            t.fireNow()
+            try? await Task.sleep(nanoseconds: 700_000_000)  // 0.5s 刻みの tick を1回またぐ
+            return ["ok": true, "state": sleepTimerState(t)]
+
+        case "sleepTimerShutdownCancel":
+            model.sleepTimer.cancelShutdownCountdown()
+            return ["ok": true, "state": sleepTimerState(model.sleepTimer)]
+
+        case "sleepTimerShutdownNow":
+            model.sleepTimer.shutdownNow()
+            return ["ok": true, "state": sleepTimerState(model.sleepTimer)]
+
+        #if DEBUG
+        case "sleepTimerRealPower":
+            // 実際に電源を操作するかの切り替え（既定 false）。テストで true にするときは
+            // 本当に Mac が落ちるので、意図して入れること。配布版にこの逃げ道は無い。
+            model.sleepTimer.performsRealPowerAction = (cmd["on"] as? NSNumber)?.boolValue ?? false
+            return ["ok": true, "state": sleepTimerState(model.sleepTimer)]
+        #endif
+
+        case "spawnProbe":
+            // 子プロセスを起こせるか（＝スリープ/シャットダウンの経路が生きているか）だけを、
+            // 電源を触らずに確かめる。Catalyst は Process が使えず posix_spawn 頼りなので、
+            // ここが通らなければ pmset も osascript も動かない。
+            let path = (cmd["path"] as? String) ?? NSTemporaryDirectory() + "spawn-probe"
+            let ok = SystemPower.spawn("/usr/bin/touch", [path])
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            return ["ok": ok, "path": path,
+                    "exists": FileManager.default.fileExists(atPath: path)]
+
+        case "sleepTimerResetPower":
+            // 記録した電源操作を消す（次の検証を前回の記録と取り違えないため）。
+            model.sleepTimer.recordingPower.reset()
+            return ["ok": true, "state": sleepTimerState(model.sleepTimer)]
+
+        case "sleepTimerState":
+            return ["ok": true, "state": sleepTimerState(model.sleepTimer)]
+
+        // MARK: 自動ページ送り
+        case "autoPagerStart":
+            let p = model.autoPager
+            if let sec = (cmd["seconds"] as? NSNumber)?.intValue, sec > 0 {
+                p.start(seconds: sec)
+            } else {
+                p.start()
+            }
+            return ["ok": true, "state": autoPagerState(p),
+                    "fraction": reader?.progression ?? NSNull()]
+
+        case "autoPagerStop":
+            model.autoPager.stop()
+            return ["ok": true, "state": autoPagerState(model.autoPager)]
+
+        case "autoPagerFire":
+            // 次の送りを現在へ引き寄せて1ページ送らせる（間隔ぶん待たずに挙動を検証する）。
+            let p = model.autoPager
+            guard p.isRunning else { return ["ok": false, "error": "auto pager not running"] }
+            let before = reader?.progression
+            p.fireNow()
+            // 送り→ relocate の往復（AutoPager 自身の終端判定と同じ待ち）を1回またぐ。
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            return ["ok": true, "state": autoPagerState(p),
+                    "before": before ?? NSNull(), "fraction": reader?.progression ?? NSNull()]
+
+        case "autoPagerState":
+            return ["ok": true, "state": autoPagerState(model.autoPager),
+                    "fraction": reader?.progression ?? NSNull()]
 
         case "closeBook":
             // 書棚へ戻す（メニュー項目の淡色表示など、本を開いていない状態の検証用）。
             model.closeBook()
             return ["ok": true, "opened": model.openedBook?.title ?? NSNull()]
 
+        case "importPaths", "importFolder":
+            // フォルダ／ファイルのパスを渡して、ドロップと同じ経路で取り込ませる。
+            // ドラッグ操作そのものは AX から起こせないので、解決済みの URL を渡す形で検証する
+            //（フォルダの再帰収集は ImportableBook.expand＝ドロップ時と同じ関数を通る）。
+            let paths = (cmd["paths"] as? [String]) ?? [(cmd["path"] as? String) ?? ""]
+            let urls = paths.filter { !$0.isEmpty }.map { URL(fileURLWithPath: $0) }
+            guard !urls.isEmpty else { return ["ok": false, "error": "path required"] }
+            let expanded = ImportableBook.expand(urls)
+            model.add(urls: urls, openIfSingle: (cmd["open"] as? Bool) ?? false)
+            return ["ok": true, "found": expanded.count, "files": expanded.map(\.path)]
+
+        case "dropSimulate":
+            // ドロップ経路そのもの（NSItemProvider → BookDrop）を通す。Finder からのドラッグは
+            // AX から起こせないので、Finder と同じ型で provider を組んで流し込む。
+            // shape: "folder"（public.folder の in-place 表現）/ "epub"（org.idpf.epub-container の
+            // in-place 表現）/ "fileURL"（public.file-url しか持たない形＝in-place が失敗する経路）。
+            let dropPaths = (cmd["paths"] as? [String]) ?? [(cmd["path"] as? String) ?? ""]
+            let dropURLs = dropPaths.filter { !$0.isEmpty }.map { URL(fileURLWithPath: $0) }
+            guard !dropURLs.isEmpty else { return ["ok": false, "error": "path required"] }
+            let shape = (cmd["shape"] as? String) ?? "folder"
+            let single = dropURLs.count == 1
+            var accepted = 0
+            for url in dropURLs {
+                let provider = TestDropProvider.make(url: url, shape: shape)
+                if BookDrop.load(from: provider, deliver: { [weak model] urls in
+                    model?.add(urls: urls, openIfSingle: single && ((cmd["open"] as? Bool) ?? false))
+                }) { accepted += 1 }
+            }
+            return ["ok": true, "accepted": accepted, "shape": shape]
+
+        case "importState":
+            // 取り込みの進み具合（帯に出しているものと同じ値）。完了はここを見て待つ。
+            var out: [String: Any] = [
+                "ok": true,
+                "running": model.importProgress != nil,
+                "report": model.importReport ?? NSNull(),
+                "books": model.books.count,
+            ]
+            if let p = model.importProgress {
+                out["progress"] = [
+                    "done": p.done, "total": p.total,
+                    "added": p.added, "skipped": p.skipped, "failed": p.failed,
+                    "current": p.current,
+                ]
+            }
+            return out
+
+        case "cancelImport":
+            model.cancelImport()
+            return ["ok": true]
+
         case "openPanel":
             // メニュー「ファイル > 開く…」と同じ経路でファイルパネルを出す。
-            model.requestOpenPanel = true
+            // folders:true は「フォルダを追加…」（フォルダだけを選ぶパネル）。
+            if (cmd["folders"] as? Bool) ?? false {
+                model.requestFolderPanel = true
+            } else {
+                model.requestOpenPanel = true
+            }
             return ["ok": true]
 
         case "displayState":
@@ -568,6 +887,88 @@ final class TestBus {
             model.open(url: b.fileURL)
             return ["ok": true, "opened": b.title]
 
+        // MARK: お気に入り・分類
+
+        case "favorite", "unfavorite", "toggleFavorite":
+            guard let b = match(cmd, model.books) else { return ["ok": false, "error": "book not found"] }
+            switch name {
+            case "favorite": model.setFavorite(bookID: b.id, true)
+            case "unfavorite": model.setFavorite(bookID: b.id, false)
+            default: model.toggleFavorite(bookID: b.id)
+            }
+            return ["ok": true, "title": b.title,
+                    "favorite": model.books.first { $0.id == b.id }?.favorite ?? false]
+
+        case "collections":
+            return ["ok": true,
+                    "collections": model.collections.map { c in
+                        [
+                            "id": c.id.uuidString,
+                            "name": c.name,
+                            "parent": c.parentID?.uuidString ?? NSNull(),
+                            "order": c.order,
+                            "path": CollectionTree.pathName(of: c.id, in: model.collections),
+                        ] as [String: Any]
+                    },
+                    "counts": Dictionary(uniqueKeysWithValues:
+                        model.shelfCounts().map { ($0.key.storageString, $0.value) })]
+
+        case "collectionAdd":
+            let parent = (cmd["parent"] as? String).flatMap(UUID.init(uuidString:))
+                ?? (cmd["parent_name"] as? String).flatMap { n in
+                    model.collections.first { $0.name == n }?.id
+                }
+            guard let id = model.addCollection(name: (cmd["name"] as? String) ?? "", parent: parent)
+            else { return ["ok": false, "error": "name is empty"] }
+            return ["ok": true, "id": id.uuidString,
+                    "path": CollectionTree.pathName(of: id, in: model.collections)]
+
+        case "collectionRename", "collectionRemove", "collectionMove":
+            guard let c = matchCollection(cmd, model.collections)
+            else { return ["ok": false, "error": "collection not found"] }
+            switch name {
+            case "collectionRename":
+                model.renameCollection(id: c.id, to: (cmd["name"] as? String) ?? "")
+            case "collectionRemove":
+                model.removeCollection(id: c.id)
+            default:
+                let parent = (cmd["parent"] as? String).flatMap(UUID.init(uuidString:))
+                    ?? (cmd["parent_name"] as? String).flatMap { n in
+                        model.collections.first { $0.name == n }?.id
+                    }
+                model.moveCollection(id: c.id, under: parent)
+            }
+            return ["ok": true, "collections": model.collections.count]
+
+        case "assign", "unassign":
+            guard let b = match(cmd, model.books) else { return ["ok": false, "error": "book not found"] }
+            guard let c = matchCollection(cmd, model.collections)
+            else { return ["ok": false, "error": "collection not found"] }
+            model.setMembership(bookID: b.id, collectionID: c.id, member: name == "assign")
+            let updated = model.books.first { $0.id == b.id }
+            return ["ok": true, "title": b.title,
+                    "collections": (updated?.collectionList ?? []).map(\.uuidString)]
+
+        case "shelfScope":
+            if let raw = cmd["scope"] as? String {
+                model.setScope(ShelfScope(storageString: raw))
+            } else if let n = cmd["name"] as? String,
+                      let c = model.collections.first(where: { $0.name == n }) {
+                model.setScope(.collection(c.id))
+            }
+            return ["ok": true, "scope": model.shelfScope.storageString,
+                    "count": model.books(in: model.shelfScope).count]
+
+        case "shelfState":
+            // 画面に出ている一覧（絞り込み・並び替え後）。切り替え直後は作り直しを挟むので、
+            // 呼ぶ側は少し待つか、`model` 側の件数（scopeCount）と突き合わせる。
+            let shown = shelfSnapshot?() ?? []
+            return ["ok": true,
+                    "scope": model.shelfScope.storageString,
+                    "scopeCount": model.books(in: model.shelfScope).count,
+                    "shownCount": shown.count,
+                    "shown": shown.prefix(50).map { ["id": $0.0.uuidString, "title": $0.1] }]
+
         case "openYomiEditor":
             guard let b = match(cmd, model.books) else { return ["ok": false, "error": "book not found"] }
             guard let hook = openYomiEditor else { return ["ok": false, "error": "editor hook not registered"] }
@@ -608,4 +1009,31 @@ final class TestBus {
         ]
     }
 }
-#endif
+
+// MARK: - ドロップの模擬（Finder のドラッグは AX から起こせないため）
+
+/// Finder がドラッグで渡してくるのと同じ形の `NSItemProvider` を組む。
+///
+/// 実ドラッグの代わりにこれを `BookDrop` へ流し込めば、フォルダの展開だけでなく
+/// **型の解決と実パスの取り出し**（Catalyst で何度も嵌まってきた所）まで通して検証できる。
+enum TestDropProvider {
+    static func make(url: URL, shape: String) -> NSItemProvider {
+        let provider = NSItemProvider()
+        switch shape {
+        case "fileURL":
+            // in-place 表現を持たず public.file-url だけ、という形（フォールバック経路の検証）。
+            provider.registerItem(forTypeIdentifier: UTType.fileURL.identifier) { completion, _, _ in
+                completion?(url as NSURL, nil)
+            }
+        default:
+            let type = (shape == "epub") ? UTType.epub.identifier : UTType.folder.identifier
+            provider.registerFileRepresentation(
+                forTypeIdentifier: type, fileOptions: [.openInPlace], visibility: .all
+            ) { completion in
+                completion(url, true, nil)
+                return nil
+            }
+        }
+        return provider
+    }
+}

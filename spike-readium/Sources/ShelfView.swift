@@ -1,7 +1,9 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Kindle 風の書棚。カバーをグリッド表示し、タップで開く。ソート・フィルタ対応。
+/// Kindle 風の書棚。カバーをグリッド表示し、タップで開く。
+/// 左のサイドバーで「すべて／お気に入り／未分類／分類（入れ子）」を選び、
+/// 右で絞り込み・並び替え・表示モードを切り替える。
 struct ShelfView: View {
     @ObservedObject var model: AppModel
 
@@ -42,108 +44,86 @@ struct ShelfView: View {
 
     @State private var sort: SortKey = .recent
     @State private var query = ""
+    /// 実際に絞り込みへ使う語。入力から少し遅らせる（1文字ごとに全冊を走らせないため）。
+    @State private var appliedQuery = ""
     @State private var field: FilterField = .all
     @State private var displayMode: DisplayMode = .grid
+    @State private var showSidebar = true
     @State private var yomiEditBook: BookEntry?
     @State private var yomiDraft = ""
-    /// 設定シート（書棚からも開ける。本を開いていないので表示反映は次に本を開いたとき）。
+    /// 新しい分類の名前を尋ねる。`newCollectionParent` の下に作る。
+    @State private var showNewCollection = false
+    @State private var newCollectionName = ""
+    @State private var newCollectionParent: UUID?
+    /// 作った分類へすぐ入れる本（「新しい分類に入れる…」から来たとき）。
+    @State private var newCollectionBook: UUID?
+    @State private var renameCollectionID: UUID?
+    @State private var renameDraft = ""
+
+    /// 絞り込み・並び替えを済ませた表示用データ。
+    ///
+    /// 冊数に比例して重い（実測 1368 冊でソート 20ms・絞り込み 6ms）ので、SwiftUI の
+    /// body 評価のたびにやり直さない。棚・絞り込み・並びのどれかが変わったときだけ作り直す。
+    @State private var contents = ShelfContents()
 
     private let columns = [GridItem(.adaptive(minimum: 130, maximum: 180), spacing: 24)]
 
-    /// フィルタのみ適用（ソートなし）。
-    private var filteredBooks: [BookEntry] {
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return model.books }
-        func hit(_ s: String) -> Bool { s.lowercased().contains(q) }
-        return model.books.filter { b in
-            switch field {
-            case .all: return hit(b.title) || hit(b.authorText) || hit(b.publisherText)
-            case .title: return hit(b.title)
-            case .author: return hit(b.authorText)
-            case .publisher: return hit(b.publisherText)
-            }
-        }
+    /// 表示用データを作り直す合図。ここが変わったときだけ計算し直す。
+    private struct RecomputeKey: Equatable {
+        var revision: Int
+        var scope: ShelfScope
+        var sort: SortKey
+        var query: String
+        var field: FilterField
+        var mode: DisplayMode
     }
 
-    /// フィルタ→ソートを適用した表示用リスト（グリッド用）。
-    private var displayed: [BookEntry] {
-        var list = filteredBooks
-        switch sort {
-        case .recent: break // model.books は lastOpenedAt 降順で保持済み
-        case .title: list.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-        case .author: list.sort { $0.authorText.localizedStandardCompare($1.authorText) == .orderedAscending }
-        case .publisher: list.sort { $0.publisherText.localizedStandardCompare($1.publisherText) == .orderedAscending }
-        }
-        return list
-    }
-
-    // MARK: 作者別 五十音インデックス
-
-    /// セクション見出しの並び順: あ〜わ → A〜Z → # → 他（漢字で読み無し）→ —（作者なし）。
-    private static let sectionOrder: [String] =
-        ["あ","か","さ","た","な","は","ま","や","ら","わ"]
-        + (65...90).map { String(UnicodeScalar($0)!) }
-        + ["#", "他", "—"]
-
-    /// かな1文字→行の頭文字（あ/か/…/わ）。かなでなければ nil。
-    private static func kanaRow(_ ch: Character) -> String? {
-        guard var v = ch.unicodeScalars.first?.value else { return nil }
-        if (0x30A1...0x30FA).contains(v) { v -= 0x60 }      // カタカナ→ひらがな
-        guard (0x3041...0x3096).contains(v) else { return nil }
-        let rows: [(UInt32, String)] = [
-            (0x3042,"あ"),(0x304B,"か"),(0x3055,"さ"),(0x305F,"た"),(0x306A,"な"),
-            (0x306F,"は"),(0x307E,"ま"),(0x3084,"や"),(0x3089,"ら"),(0x308F,"わ"),
-        ]
-        var row = "あ"                                       // ぁ等の小書きは あ 行に寄せる
-        for (start, name) in rows where v >= start { row = name }
-        return row
-    }
-
-    /// 本の作者読みから見出しキーを決める。
-    private static func sectionKey(_ book: BookEntry) -> String {
-        let key = book.authorSortKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let ch = key.first else { return "—" }         // 作者なし
-        if let row = kanaRow(ch) { return row }
-        if ch.isNumber { return "#" }
-        if ch.isLetter {
-            let up = String(ch).uppercased()
-            if let f = up.unicodeScalars.first, f.isASCII { return String(up.prefix(1)) }
-            return "他"                                       // 漢字など（読み未取得）
-        }
-        return "#"
-    }
-
-    /// フィルタ後の本を見出しでグループ化し、順序どおりに並べたセクション配列。
-    private var authorSections: [(key: String, books: [BookEntry])] {
-        let groups = Dictionary(grouping: filteredBooks) { Self.sectionKey($0) }
-        return groups.map { (key: $0.key, books: $0.value.sorted { a, b in
-            let c = a.authorSortKey.localizedStandardCompare(b.authorSortKey)
-            if c != .orderedSame { return c == .orderedAscending }
-            return a.title.localizedStandardCompare(b.title) == .orderedAscending
-        }) }
-        .sorted {
-            (Self.sectionOrder.firstIndex(of: $0.key) ?? 999)
-                < (Self.sectionOrder.firstIndex(of: $1.key) ?? 999)
-        }
+    private var recomputeKey: RecomputeKey {
+        RecomputeKey(revision: model.libraryRevision, scope: model.shelfScope,
+                     sort: sort, query: appliedQuery, field: field, mode: displayMode)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            if model.books.isEmpty {
-                emptyState
-            } else if filteredBooks.isEmpty {
-                noMatchState
-            } else if displayMode == .grid {
-                gridView
-            } else {
-                authorIndexView
+        HStack(spacing: 0) {
+            if showSidebar {
+                CollectionSidebar(
+                    model: model,
+                    counts: contents.counts,
+                    onNewCollection: { parent in
+                        newCollectionParent = parent
+                        newCollectionBook = nil
+                        newCollectionName = ""
+                        showNewCollection = true
+                    },
+                    onRename: { id in
+                        renameDraft = model.collections.first { $0.id == id }?.name ?? ""
+                        renameCollectionID = id
+                    })
+                .frame(width: 240)
+                Divider()
             }
+            shelfPane
         }
         // 書棚全体の地。最後に読んだ本のカバーを弱くぼかして敷く（スクロールしても動かない）。
         .background { ShelfBackdrop(image: backdropBook.flatMap { model.coverImage(for: $0) }) }
         .task { model.backfillMetadataIfNeeded() }
+        // 入力から少し遅らせて絞り込む。1文字ごとに全冊を走らせない。
+        .task(id: query) {
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            guard !Task.isCancelled else { return }
+            appliedQuery = query
+        }
+        // 表示用データの作り直し。取り込み中は蔵書が次々変わるが、`.task(id:)` は合図が
+        // 変わるたびに前の計算を取り消すので、落ち着くまで作り直しは走らない。
+        .task(id: recomputeKey) {
+            let key = recomputeKey
+            if !contents.isEmpty || !model.books.isEmpty {
+                try? await Task.sleep(nanoseconds: 120_000_000)
+            }
+            guard !Task.isCancelled else { return }
+            contents = ShelfContents.make(model: model, scope: key.scope, query: key.query,
+                                          field: key.field, sort: key.sort, mode: key.mode)
+        }
         #if DEBUG
         .task {
             // DEBUG 限定: テストバスから実アラート（作者の読み）を開けるようフックを登録。
@@ -151,6 +131,8 @@ struct ShelfView: View {
                 yomiDraft = book.resolvedAuthorReading ?? ""
                 yomiEditBook = book
             }
+            // 書棚に「いま実際に出ている本」を読めるようにする（棚の切り替えの検証用）。
+            TestBus.shared.shelfSnapshot = { contents.all.map { ($0.id, $0.title) } }
         }
         #endif
         .sheet(isPresented: $model.showSettings) {
@@ -175,10 +157,57 @@ struct ShelfView: View {
         } message: {
             Text("五十音インデックスの分類・並びに使います。空欄でEPUBの情報に戻します。")
         }
+        .alert("新しい分類", isPresented: $showNewCollection) {
+            TextField("分類の名前", text: $newCollectionName)
+            Button("作成") {
+                guard let id = model.addCollection(name: newCollectionName,
+                                                   parent: newCollectionParent) else { return }
+                if let book = newCollectionBook {
+                    model.setMembership(bookID: book, collectionID: id, member: true)
+                }
+                newCollectionBook = nil
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("キャンセル", role: .cancel) { newCollectionBook = nil }
+        } message: {
+            Text(newCollectionParent.map {
+                "「\(CollectionTree.pathName(of: $0, in: model.collections))」の下に作ります。"
+            } ?? "本を分けてしまうための棚です。あとから入れ子にもできます。")
+        }
+        .alert("分類の名前を変更", isPresented: Binding(
+            get: { renameCollectionID != nil },
+            set: { if !$0 { renameCollectionID = nil } }
+        )) {
+            TextField("分類の名前", text: $renameDraft)
+            Button("保存") {
+                if let id = renameCollectionID { model.renameCollection(id: id, to: renameDraft) }
+                renameCollectionID = nil
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("キャンセル", role: .cancel) { renameCollectionID = nil }
+        }
+    }
+
+    // MARK: 書棚側（ヘッダ + 本）
+
+    private var shelfPane: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            if model.books.isEmpty {
+                emptyState
+            } else if contents.isEmpty {
+                noMatchState
+            } else if displayMode == .grid {
+                gridView
+            } else {
+                authorIndexView
+            }
+        }
     }
 
     /// 最後に読んだ（＝最後に開いた）1冊。段の主役であり、書棚の地に敷くカバーの持ち主。
-    /// 絞り込みに左右されない（地が検索のたびに入れ替わると落ち着かないため）。
+    /// 絞り込みや棚の選択に左右されない（地が操作のたびに入れ替わると落ち着かないため）。
     private var backdropBook: BookEntry? {
         model.books.max(by: { $0.lastOpenedAt < $1.lastOpenedAt })
     }
@@ -186,9 +215,7 @@ struct ShelfView: View {
     /// 「続きを読む」段に出す本。
     /// 絞り込み中は、その結果に含まれるときだけ出す（無関係な本が段に残らないように）。
     private var continueBook: BookEntry? {
-        guard let latest = backdropBook,
-              filteredBooks.contains(where: { $0.id == latest.id })
-        else { return nil }
+        guard let latest = backdropBook, contents.containsID(latest.id) else { return nil }
         return latest
     }
 
@@ -202,7 +229,7 @@ struct ShelfView: View {
                     Divider()
                 }
                 LazyVGrid(columns: columns, spacing: 28) {
-                    ForEach(displayed) { book in cell(book) }
+                    ForEach(contents.all) { book in cell(book) }
                 }
                 .padding(24)
             }
@@ -213,7 +240,7 @@ struct ShelfView: View {
     private var authorIndexView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20, pinnedViews: [.sectionHeaders]) {
-                ForEach(authorSections, id: \.key) { section in
+                ForEach(contents.sections, id: \.key) { section in
                     Section {
                         LazyVGrid(columns: columns, spacing: 28) {
                             ForEach(section.books) { book in cell(book) }
@@ -234,12 +261,44 @@ struct ShelfView: View {
         }
     }
 
-    /// カバー1枚（タップで開く・右クリックで削除）。グリッド/インデックス共用。
+    /// カバー1枚（タップで開く・右クリックでお気に入り／分類／削除）。グリッド/インデックス共用。
     @ViewBuilder
     private func cell(_ book: BookEntry) -> some View {
         BookCell(book: book, image: model.coverImage(for: book))
             .onTapGesture { model.open(url: book.fileURL) }
+            // サイドバーの分類へ放り込めるようにする（本の ID を文字列で渡すだけ）。
+            .onDrag { NSItemProvider(object: book.id.uuidString as NSString) }
             .contextMenu {
+                Button {
+                    model.toggleFavorite(bookID: book.id)
+                } label: {
+                    Label(book.favorite ? "お気に入りから外す" : "お気に入りに追加",
+                          systemImage: book.favorite ? "star.slash" : "star")
+                }
+                Menu {
+                    if model.collections.isEmpty {
+                        Text("分類がありません")
+                    }
+                    ForEach(CollectionTree.rows(model.collections,
+                                                expanded: Set(model.collections.map(\.id)))) { row in
+                        let inside = book.collectionList.contains(row.id)
+                        Button {
+                            model.setMembership(bookID: book.id, collectionID: row.id,
+                                                member: !inside)
+                        } label: {
+                            Label(String(repeating: "　", count: row.depth) + row.collection.name,
+                                  systemImage: inside ? "checkmark.circle.fill" : "circle")
+                        }
+                    }
+                    Divider()
+                    Button {
+                        newCollectionParent = nil
+                        newCollectionBook = book.id
+                        newCollectionName = ""
+                        showNewCollection = true
+                    } label: { Label("新しい分類に入れる…", systemImage: "folder.badge.plus") }
+                } label: { Label("分類", systemImage: "folder") }
+                Divider()
                 Button {
                     yomiDraft = book.resolvedAuthorReading ?? ""
                     yomiEditBook = book
@@ -254,19 +313,32 @@ struct ShelfView: View {
     private var header: some View {
         VStack(spacing: 10) {
             HStack {
-                Text("書棚")
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { showSidebar.toggle() }
+                } label: {
+                    Image(systemName: "sidebar.leading")
+                }
+                .help("サイドバーの表示")
+                Text(scopeTitle)
                     .font(.title2.bold())
+                // 桁区切りはサイドバーの冊数（SwiftUI の既定書式）と揃える。
+                Text(String(format: String(localized: "%@冊"), contents.all.count.formatted()))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 Spacer()
                 Button { model.showSettings = true } label: {
                     Image(systemName: "gearshape")
                 }
                 .help("設定")
-                Button {
-                    model.requestOpenPanel = true
+                // ファイルとフォルダでパネルを分ける（1枚では混ぜて選べない。BookOpenPanel を参照）。
+                // キー割り当て（⌘O／⇧⌘O）はメニューバー側が持つので、ここでは付けない。
+                Menu {
+                    Button("ファイルを選ぶ…") { model.requestOpenPanel = true }
+                    Button("フォルダを選ぶ…") { model.requestFolderPanel = true }
                 } label: {
                     Label("本を追加", systemImage: "plus")
                 }
-                .keyboardShortcut("o")
+                .fixedSize()
             }
             HStack(spacing: 10) {
                 // フィルタ（絞り込み検索）＋ 対象項目
@@ -322,6 +394,17 @@ struct ShelfView: View {
         .background(Color(uiColor: .systemBackground).opacity(0.74))
     }
 
+    /// ヘッダに出す、いま見ている棚の名前。
+    private var scopeTitle: String {
+        switch model.shelfScope {
+        case .all: return String(localized: "書棚")
+        case .favorites: return String(localized: "お気に入り")
+        case .unfiled: return String(localized: "未分類")
+        case .collection(let id):
+            return model.collections.first { $0.id == id }?.name ?? String(localized: "書棚")
+        }
+    }
+
     private var noMatchState: some View {
         VStack(spacing: 12) {
             Spacer()
@@ -330,7 +413,7 @@ struct ShelfView: View {
                 .foregroundStyle(.secondary)
             Text("該当する本がありません")
                 .font(.headline)
-            Text("フィルタ条件を変えてください")
+            Text(appliedQuery.isEmpty ? "この分類にはまだ本が入っていません" : "フィルタ条件を変えてください")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Spacer()
@@ -346,12 +429,265 @@ struct ShelfView: View {
                 .foregroundStyle(.secondary)
             Text("本がありません")
                 .font(.headline)
-            Text("「本を追加」または EPUB をウィンドウにドラッグ＆ドロップ")
+            Text("「本を追加」または EPUB やフォルダをウィンドウにドラッグ＆ドロップ")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Text("フォルダは中の EPUB をまとめて登録します（サブフォルダも探します）")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - 表示用データ（絞り込み・並び替えの結果）
+
+/// 書棚に出す本を、絞り込み・並び替えまで済ませた形で持つ。
+///
+/// 作るのが重い（1368 冊で数十 ms）ので、`ShelfView` は @State に控えて使い回す。
+/// SwiftUI の body から毎回作らないことが要点で、中身の作り方は従来と同じ。
+struct ShelfContents {
+    var all: [BookEntry] = []
+    var sections: [(key: String, books: [BookEntry])] = []
+    var counts: [ShelfScope: Int] = [:]
+    private var ids: Set<UUID> = []
+
+    var isEmpty: Bool { all.isEmpty }
+    func containsID(_ id: UUID) -> Bool { ids.contains(id) }
+
+    @MainActor
+    static func make(model: AppModel, scope: ShelfScope, query: String,
+                     field: ShelfView.FilterField, sort: ShelfView.SortKey,
+                     mode: ShelfView.DisplayMode) -> ShelfContents {
+        var out = ShelfContents()
+        out.counts = model.shelfCounts()
+
+        var list = model.books(in: scope)
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !q.isEmpty {
+            func hit(_ s: String) -> Bool { s.lowercased().contains(q) }
+            list = list.filter { b in
+                switch field {
+                case .all: return hit(b.title) || hit(b.authorText) || hit(b.publisherText)
+                case .title: return hit(b.title)
+                case .author: return hit(b.authorText)
+                case .publisher: return hit(b.publisherText)
+                }
+            }
+        }
+
+        switch sort {
+        case .recent: break // model.books は lastOpenedAt 降順で保持済み
+        case .title: list.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        case .author: list.sort { $0.authorText.localizedStandardCompare($1.authorText) == .orderedAscending }
+        case .publisher: list.sort { $0.publisherText.localizedStandardCompare($1.publisherText) == .orderedAscending }
+        }
+        out.all = list
+        out.ids = Set(list.map(\.id))
+        if mode == .authorIndex { out.sections = AuthorIndex.sections(of: list) }
+        return out
+    }
+}
+
+// MARK: - 作者別 五十音インデックス
+
+/// 作者の読みから見出しを決めてグループ分けする。純ロジックなので単体で確かめられる。
+enum AuthorIndex {
+    /// セクション見出しの並び順: あ〜わ → A〜Z → # → 他（漢字で読み無し）→ —（作者なし）。
+    static let sectionOrder: [String] =
+        ["あ","か","さ","た","な","は","ま","や","ら","わ"]
+        + (65...90).map { String(UnicodeScalar($0)!) }
+        + ["#", "他", "—"]
+
+    /// かな1文字→行の頭文字（あ/か/…/わ）。かなでなければ nil。
+    static func kanaRow(_ ch: Character) -> String? {
+        guard var v = ch.unicodeScalars.first?.value else { return nil }
+        if (0x30A1...0x30FA).contains(v) { v -= 0x60 }      // カタカナ→ひらがな
+        guard (0x3041...0x3096).contains(v) else { return nil }
+        let rows: [(UInt32, String)] = [
+            (0x3042,"あ"),(0x304B,"か"),(0x3055,"さ"),(0x305F,"た"),(0x306A,"な"),
+            (0x306F,"は"),(0x307E,"ま"),(0x3084,"や"),(0x3089,"ら"),(0x308F,"わ"),
+        ]
+        var row = "あ"                                       // ぁ等の小書きは あ 行に寄せる
+        for (start, name) in rows where v >= start { row = name }
+        return row
+    }
+
+    /// 本の作者読みから見出しキーを決める。
+    static func sectionKey(_ book: BookEntry) -> String {
+        let key = book.authorSortKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let ch = key.first else { return "—" }         // 作者なし
+        if let row = kanaRow(ch) { return row }
+        if ch.isNumber { return "#" }
+        if ch.isLetter {
+            let up = String(ch).uppercased()
+            if let f = up.unicodeScalars.first, f.isASCII { return String(up.prefix(1)) }
+            return "他"                                       // 漢字など（読み未取得）
+        }
+        return "#"
+    }
+
+    /// 見出しでグループ化し、順序どおりに並べたセクション配列。
+    static func sections(of books: [BookEntry]) -> [(key: String, books: [BookEntry])] {
+        let groups = Dictionary(grouping: books) { sectionKey($0) }
+        return groups.map { (key: $0.key, books: $0.value.sorted { a, b in
+            let c = a.authorSortKey.localizedStandardCompare(b.authorSortKey)
+            if c != .orderedSame { return c == .orderedAscending }
+            return a.title.localizedStandardCompare(b.title) == .orderedAscending
+        }) }
+        .sorted {
+            (sectionOrder.firstIndex(of: $0.key) ?? 999) < (sectionOrder.firstIndex(of: $1.key) ?? 999)
+        }
+    }
+}
+
+// MARK: - サイドバー（分類の階層）
+
+/// 左のサイドバー。固定の棚（すべて／お気に入り／未分類）と、入れ子にできる分類を並べる。
+///
+/// 分類は再帰的な `DisclosureGroup` ではなく、**平らな列に均してから**出す
+///（`CollectionTree.rows`）。行の深さも開閉も自分で持つので、どの行が出ているかを
+/// そのまま数え上げられる＝ふるまいを機械で確かめられる。
+private struct CollectionSidebar: View {
+    @ObservedObject var model: AppModel
+    let counts: [ShelfScope: Int]
+    let onNewCollection: (UUID?) -> Void
+    let onRename: (UUID) -> Void
+
+    @State private var expanded: Set<UUID> = []
+
+    var body: some View {
+        List {
+            Section("書棚") {
+                row(.all, title: String(localized: "すべての本"), symbol: "books.vertical")
+                row(.favorites, title: String(localized: "お気に入り"), symbol: "star.fill")
+                row(.unfiled, title: String(localized: "未分類"), symbol: "tray")
+            }
+            Section {
+                ForEach(CollectionTree.rows(model.collections, expanded: expanded)) { r in
+                    collectionRow(r)
+                }
+                Button {
+                    onNewCollection(nil)
+                } label: {
+                    Label("新しい分類…", systemImage: "folder.badge.plus")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            } header: {
+                HStack {
+                    Text("分類")
+                    Spacer()
+                    // 分類が1つも無いうちは「新しい分類…」行だけでは気付きにくいので見出しにも出す。
+                    Button { onNewCollection(nil) } label: { Image(systemName: "plus") }
+                        .buttonStyle(.plain)
+                        .help("最上位に分類を作る")
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .background(Color(uiColor: .systemBackground).opacity(0.74))
+    }
+
+    @ViewBuilder
+    private func row(_ scope: ShelfScope, title: String, symbol: String) -> some View {
+        Button {
+            model.setScope(scope)
+        } label: {
+            HStack {
+                Label(title, systemImage: symbol)
+                Spacer()
+                Text("\(counts[scope] ?? 0)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(selectionBackground(scope))
+    }
+
+    @ViewBuilder
+    private func collectionRow(_ r: CollectionTree.Row) -> some View {
+        let scope = ShelfScope.collection(r.id)
+        HStack(spacing: 4) {
+            // 深さぶんの字下げ。子を持つ行だけ開閉の山形を出す。
+            Spacer().frame(width: CGFloat(r.depth) * 14)
+            Button {
+                if expanded.contains(r.id) { expanded.remove(r.id) } else { expanded.insert(r.id) }
+            } label: {
+                Image(systemName: expanded.contains(r.id) ? "chevron.down" : "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 12)
+                    .opacity(r.hasChildren ? 1 : 0)
+            }
+            .buttonStyle(.plain)
+            .disabled(!r.hasChildren)
+
+            Button {
+                model.setScope(scope)
+            } label: {
+                HStack {
+                    Label(r.collection.name, systemImage: "folder")
+                        .lineLimit(1)
+                    Spacer()
+                    Text("\(counts[scope] ?? 0)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .listRowBackground(selectionBackground(scope))
+        // 本のカバーをここへ落とすと、その分類に入る。
+        .onDrop(of: [.text], isTargeted: nil) { providers in
+            receiveBooks(providers, into: r.id)
+        }
+        .contextMenu {
+            Button { onRename(r.id) } label: { Label("名前を変更…", systemImage: "pencil") }
+            Button { onNewCollection(r.id) } label: {
+                Label("この中に分類を作る…", systemImage: "folder.badge.plus")
+            }
+            if r.collection.parentID != nil {
+                Button { model.moveCollection(id: r.id, under: nil) } label: {
+                    Label("最上位へ移動", systemImage: "arrow.up.to.line")
+                }
+            }
+            Divider()
+            Button(role: .destructive) { model.removeCollection(id: r.id) } label: {
+                Label("分類を削除", systemImage: "trash")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func selectionBackground(_ scope: ShelfScope) -> some View {
+        if model.shelfScope == scope {
+            Color.accentColor.opacity(0.18)
+        } else {
+            Color.clear
+        }
+    }
+
+    /// カバーから落ちてきた本の ID を受け取って分類へ入れる。
+    private func receiveBooks(_ providers: [NSItemProvider], into collectionID: UUID) -> Bool {
+        var ids: [UUID] = []
+        let group = DispatchGroup()
+        for p in providers where p.canLoadObject(ofClass: NSString.self) {
+            group.enter()
+            _ = p.loadObject(ofClass: NSString.self) { value, _ in
+                if let s = value as? String, let id = UUID(uuidString: s) { ids.append(id) }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) {
+            guard !ids.isEmpty else { return }
+            model.setMembership(bookIDs: ids, collectionID: collectionID, member: true)
+        }
+        return true
     }
 }
 
@@ -469,6 +805,19 @@ private struct BookCell: View {
                     .stroke(.black.opacity(0.12), lineWidth: 1)
             )
             .shadow(color: .black.opacity(0.18), radius: 5, x: 0, y: 3)
+            .overlay(alignment: .topLeading) {
+                // お気に入りは左上（右上はファイル欠落の警告が使う）。
+                if book.favorite {
+                    // 表紙の絵柄に紛れないよう、進捗バッジと同じ暗い地を敷く
+                    //（星だけだと明るい表紙・黄色い装丁の上で見えなくなる）。
+                    Image(systemName: "star.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.yellow)
+                        .padding(5)
+                        .background(Circle().fill(.black.opacity(0.65)))
+                        .padding(6)
+                }
+            }
             .overlay(alignment: .topTrailing) {
                 if !book.fileExists {
                     Image(systemName: "exclamationmark.triangle.fill")

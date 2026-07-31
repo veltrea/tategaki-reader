@@ -49,6 +49,13 @@ struct NavigationCommands: View {
             }
             .disabled(true)
         }
+        // 自動ページ送りは開いている本に対する操作だが、稼働中の状態（残り秒・停止）は
+        // 本を閉じても見えるようにしておく（＝分岐の外に置き、項目ごとに淡色化する）。
+        Divider()
+        Menu("自動ページ送り") {
+            AutoPagerMenuItems(model: model, pager: model.autoPager,
+                               enabled: model.activeReader != nil)
+        }
     }
 }
 
@@ -131,6 +138,12 @@ struct SpeechCommands: View {
                 Button("読み上げ辞書…") { }
             }
             .disabled(true)
+        }
+        // スリープタイマーは本を開いていなくても操作できる（走っているタイマーを
+        // 書棚へ戻ってから解除したい、という場面があるため）。
+        Divider()
+        Menu("スリープタイマー") {
+            SleepTimerMenuItems(model: model, timer: model.sleepTimer)
         }
     }
 }

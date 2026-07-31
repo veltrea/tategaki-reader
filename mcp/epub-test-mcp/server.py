@@ -188,20 +188,33 @@ TOOLS = [
     {
         "name": "app_cmd",
         "description": (
-            "アプリ内 DEBUG テストバス(127.0.0.1:47831)へコマンドを送る。AX では駆動できない "
-            ".contextMenu 限定操作や、モデルの真の状態取得に使う。DEBUG ビルドでのみ動作。\n"
+            "アプリ内コマンドバス(127.0.0.1:47831)へコマンドを送る。AX では駆動できない "
+            ".contextMenu 限定操作や、モデルの真の状態取得に使う。\n"
+            "読み辞書まわり（ping / dictList / dictAdd / dictUpdate / dictDelete / setRules / "
+            "applyRules）は配布版でも通る。それ以外は DEBUG ビルドでのみ動作。\n"
             "cmd 一覧: ping / state / setYomi(title_contains,yomi) / clearYomi(title_contains) / "
             "remove(title_contains) / open(title_contains) / openYomiEditor(title_contains) / "
-            "overlayOn / overlayOff / measureImage（計りレイヤーは measure_overlay ツールが便利）。"
+            "overlayOn / overlayOff / measureImage（計りレイヤーは measure_overlay ツールが便利）/ "
+            "dictList / dictAdd(surface,reading,layer) / dictDelete(id) / "
+            "applyRules(text) …読み辞書の一括投入と検算。"
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "cmd": {"type": "string", "description": "コマンド名（例 state, setYomi）"},
+                "cmd": {"type": "string", "description": "コマンド名（例 state, setYomi, dictAdd）"},
                 "title_contains": {"type": "string", "description": "対象書籍をタイトル部分一致で指定"},
                 "title": {"type": "string"},
-                "id": {"type": "string"},
+                "id": {"type": "string", "description": "対象の id（dictUpdate / dictDelete の語 id など）"},
                 "yomi": {"type": "string", "description": "setYomi 用の読み（かな）"},
+                # 読み辞書の編集・検算。手で数十件入れるのは割に合わないので、
+                # エージェントが dictAdd → applyRules の往復で自分の登録結果を検算できるようにする。
+                "surface": {"type": "string", "description": "dictAdd/dictUpdate: 本文中の表記（例 明暗）"},
+                "reading": {"type": "string", "description": "dictAdd/dictUpdate: 読み（カタカナ）"},
+                "layer": {
+                    "type": "integer",
+                    "description": "dictAdd/dictUpdate: 適用レイヤー 1..10（大きいほど先に置換）。既定 5",
+                },
+                "text": {"type": "string", "description": "applyRules: 辞書を適用して読み上げに渡る文字列を得る文"},
             },
             "required": ["cmd"],
         },

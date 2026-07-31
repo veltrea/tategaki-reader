@@ -40,8 +40,20 @@ struct BookEntry: Identifiable, Codable, Equatable {
     var authorYomi: String?
     /// 読了率 0...1（最後に位置を保存したときの totalProgression。旧データ互換のため optional）。
     var progress: Double?
+    /// お気に入り（旧データ互換のため optional。nil = 付けていない）。
+    var isFavorite: Bool?
+    /// 入っている分類の ID。1冊が複数の分類に入れる（作者別と叢書別の両方に置く、など）。
+    var collectionIDs: [UUID]?
+    /// 一度でも EPUB を開いてメタデータを調べたか。
+    ///
+    /// 作者の読み(file-as)も表紙も**持っていないのが正しい本**がある。この印が無いと
+    /// 「まだ埋まっていない本」として毎回の起動で調べ直すことになり、蔵書が増えるほど
+    /// 起動が重くなる（実データで 91 冊が延々と再調査されていた）。
+    var metaProbed: Bool?
 
     var fileURL: URL { URL(fileURLWithPath: path) }
+    var favorite: Bool { isFavorite == true }
+    var collectionList: [UUID] { collectionIDs ?? [] }
     /// ソート・フィルタ用の表示値（未取得は空文字扱い）。
     var authorText: String { author ?? "" }
     var publisherText: String { publisher ?? "" }
@@ -340,8 +352,9 @@ struct AspectRatio: Codable, Equatable {
 // ここは「全書籍共通CSS」「解決済みCSS」の保存キーと結合ロジックだけを持つ。
 
 enum EpubOpener {
-    /// 全書籍共通CSSの UserDefaults キー。
-    static let userCSSKey = "reader.userCSS"
+    /// 全書籍共通CSSの UserDefaults キー。**書棚ごとに分ける**（手元の蔵書に合わせた調整が、
+    /// 別の書棚を見せているときの CSS 編集シートに出てこないように）。
+    static var userCSSKey: String { ProfileDefaults.key(.userCSS) }
     /// 現在開いている本の「解決済みCSS（共通＋本別）」の UserDefaults キー。
     /// ReaderModel が本を開くたび／編集のたびにここへ書き込み、bridge の setStyle が反映する。
     static let activeCSSKey = "reader.activeCSS"
@@ -360,43 +373,121 @@ enum EpubOpener {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var books: [BookEntry] = []
+    /// 書棚の分類（入れ子にできる）。
+    @Published var collections: [ShelfCollection] = []
+    /// いまサイドバーで選んでいる棚。書棚を離れても覚えておく。
+    @Published var shelfScope: ShelfScope = .all
+    /// 蔵書の中身が変わるたびに増える番号。
+    ///
+    /// 書棚の絞り込み・並び替えは冊数に比例して重い（実測 1368 冊でソート 20ms）ので、
+    /// SwiftUI の body 評価のたびにやり直すわけにいかない。表示側はこの番号を見て
+    /// 「変わったときだけ」作り直す。`books` の配列そのものを比べると 1368 要素の
+    /// 突き合わせになるので、番号1個で済ませる。
+    @Published private(set) var libraryRevision = 0
     @Published var openedBook: BookEntry?
     /// メニュー「ファイル > 開く…」から fileImporter を出すためのフラグ。
     @Published var requestOpenPanel = false
+    /// 「フォルダから追加…」でフォルダだけを選ぶパネルを出すためのフラグ。
+    /// 本とフォルダを1枚のパネルで混ぜて選ばせられない（Catalyst のパネルはフォルダを
+    /// 「選ぶ対象」ではなく「潜る先」として扱い、フォルダを選んでも『開く』が押せない）ため、
+    /// フォルダ用の入口を別に持つ。
+    @Published var requestFolderPanel = false
     /// 設定シート（オーディオ＋表示）の表示。書棚・リーダーのどちらからでも、
     /// またメニュー「環境設定… ⌘,」からも開くので、画面ではなくアプリ側で持つ。
     @Published var showSettings = false
     /// 本文検索シートの表示。ツールバーの虫めがねと、メニュー「編集 > 検索…（⌘F）」の
     /// どちらからも開くので、リーダー画面ではなくアプリ側で持つ。
     @Published var showSearch = false
+    /// スリープタイマーの「時間を指定…」の入力。リーダー下部の月アイコンからも
+    /// メニューバーからも開くので、入力欄の提示は RootView（アプリ側）に置く。
+    @Published var showSleepTimerCustom = false
+    /// 自動ページ送りの「間隔を指定…」の入力。リーダー下部からもメニューバーからも開くので、
+    /// 入力欄の提示は RootView（アプリ側）に置く。
+    @Published var showAutoPagerCustom = false
     /// 全書籍共通の読書設定（フォント・配色）。
     @Published var settings = ReadingSettings()
     /// いま開いているリーダー。メニューバーの「表示」からは画面階層をたどれないので、
     /// アプリ側で現在のリーダーを持っておき、メニューの操作先にする
     ///（ReaderModel 側の model 参照は weak なので循環しない）。
     @Published var activeReader: ReaderModel?
+    /// 読み上げのスリープタイマー。メニューバー・リーダー下部・満了時の告知が同じ1個を見るので、
+    /// 画面ではなくアプリ側で持つ（本を閉じても走り続ける）。
+    /// 自身が ObservableObject なので、監視する側は `model.sleepTimer` を直接見ること。
+    let sleepTimer = SleepTimer()
+    /// 自動ページ送り。送る相手は「いま開いているリーダー」で、書棚へ戻ると自分で止まる。
+    /// メニューバー・リーダー下部が同じ1個を見るので、画面ではなくアプリ側で持つ。
+    /// 自身が ObservableObject なので、監視する側は `model.autoPager` を直接見ること。
+    let autoPager = AutoPager()
 
-    private let defaultsKey = "library.books.v1"
+    /// 書棚（プロファイル）の一覧。メニューと管理シートが同じ順で出す。
+    @Published private(set) var profiles: [ShelfProfile] = []
+    /// いま見ている書棚。
+    @Published private(set) var currentProfileID = ShelfProfile.primaryID
+    /// 書棚の管理シートの表示。書棚・リーダーのどちらからでも、またメニューからも開くので
+    /// 画面ではなくアプリ側で持つ。
+    @Published var showProfileManager = false
+
+    /// 蔵書の保存先（いま見ている書棚の1ファイル。書き込みはまとめて行う）。
+    /// 書棚を切り替えると保存先が変わるので、そのとき作り直す。
+    private var store = LibraryStore()
+    private let profileStore = ProfileStore()
     private let settingsKey = "library.settings.v1"
+    /// 最後に選んでいた棚。**書棚ごとに分ける**（別の書棚に無い分類を指してしまうため）。
+    private var scopeKey: String { ProfileDefaults.key(.shelfScope) }
 
     init() {
+        // 蔵書を読む前に「どの書棚を見るか」を決める。LibraryStore も表紙も翻訳キャッシュも
+        // ここで決まった場所を見るので、順番を入れ替えてはいけない。
+        let index = profileStore.load(primaryName: String(localized: "自分の書棚"))
+        ProfileLocation.shared.move(to: index.currentID)
+        profiles = index.profiles
+        currentProfileID = index.currentID
+        store = LibraryStore()
         load()
         loadSettings()
+        // 満了時に止める相手は「いま開いているリーダー」。書棚に戻っていれば止める対象はいないが、
+        // スリープ／シャットダウンの追加動作はタイマー側でそのまま続く。
+        sleepTimer.onExpire = { [weak self] in
+            self?.activeReader?.stopSpeaking()
+        }
+        // 自動ページ送りの相手も「いま開いているリーダー」。本を差し替えても追従させたいので、
+        // 参照を渡さず毎回引き直す（相手が居なくなればタイマー側が自分で止まる）。
+        autoPager.targetProvider = { [weak self] in self?.activeReader }
     }
 
     // MARK: 永続化
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
-              let decoded = try? JSONDecoder().decode([BookEntry].self, from: data)
-        else { return }
-        books = decoded.sorted { $0.lastOpenedAt > $1.lastOpenedAt }
+        let snapshot = store.load()
+        books = snapshot.books.sorted { $0.lastOpenedAt > $1.lastOpenedAt }
+        collections = snapshot.collections
+        if let raw = UserDefaults.standard.string(forKey: scopeKey) {
+            shelfScope = ShelfScope(storageString: raw)
+        }
+        // 保存されていた棚がもう無い（分類を消したあと等）ならすべての本へ戻す。
+        if case .collection(let id) = shelfScope,
+           !collections.contains(where: { $0.id == id }) {
+            shelfScope = .all
+        }
+        // 蔵書のカバーはセル表示用に縮めて持つが、無制限に溜めると数百冊ぶんで
+        // 数百 MB になる。冊数と総量の両方で頭を打たせる。
+        coverCache.countLimit = 300
+        coverCache.totalCostLimit = 96 * 1024 * 1024   // 96MB（cost はピクセルのバイト数）
     }
 
+    /// 蔵書の保存を予約する（実際の書き出しは 0.7 秒ぶんまとめて1回）。
+    ///
+    /// 以前の `save()` は呼ぶたびに全冊をエンコードして UserDefaults へ書いていた。
+    /// ページ送りと一括登録の両方がこれを1件ごとに呼ぶので、冊数がそのまま体感の重さに
+    /// なっていた（実測 1368 冊で 12.5ms/回）。詳しくは `LibraryStore` を参照。
     private func save() {
-        if let data = try? JSONEncoder().encode(books) {
-            UserDefaults.standard.set(data, forKey: defaultsKey)
-        }
+        libraryRevision &+= 1
+        store.scheduleSave(LibrarySnapshot(books: books, collections: collections))
+    }
+
+    /// 溜めている変更を書き切る。アプリ終了・バックグラウンド移行・本を閉じたときに呼ぶ。
+    func flushPendingSaves() {
+        store.flush()
     }
 
     private func loadSettings() {
@@ -444,9 +535,153 @@ final class AppModel: ObservableObject {
         books.first(where: { $0.id == bookID })?.bookmarkList ?? []
     }
 
+    // MARK: お気に入り
+
+    func setFavorite(bookID: UUID, _ on: Bool) {
+        guard let idx = books.firstIndex(where: { $0.id == bookID }) else { return }
+        books[idx].isFavorite = on ? true : nil   // 付けていない本にキーを残さない
+        save()
+    }
+
+    func toggleFavorite(bookID: UUID) {
+        guard let b = books.first(where: { $0.id == bookID }) else { return }
+        setFavorite(bookID: bookID, !b.favorite)
+    }
+
+    // MARK: 分類（コレクション）
+    //
+    // 本の側に所属を持たせる（`BookEntry.collectionIDs`）。分類を消しても本のデータは
+    // 壊れないし、1冊を複数の分類へ入れられる。
+
+    @discardableResult
+    func addCollection(name: String, parent: UUID? = nil) -> UUID? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        // 親がもう無いなら最上位に作る（消えた分類の下にぶら下げない）。
+        let realParent = (parent.flatMap { p in collections.contains { $0.id == p } ? p : nil })
+        let c = ShelfCollection(
+            name: trimmed, parentID: realParent,
+            order: CollectionTree.nextOrder(under: realParent, in: collections))
+        collections.append(c)
+        save()
+        return c.id
+    }
+
+    func renameCollection(id: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let idx = collections.firstIndex(where: { $0.id == id }) else { return }
+        collections[idx].name = trimmed
+        save()
+    }
+
+    /// 分類を消す。**子の分類は親へ繰り上げる**（階層に穴を空けない）。本は消さない。
+    func removeCollection(id: UUID) {
+        guard collections.contains(where: { $0.id == id }) else { return }
+        collections = CollectionTree.removing(id, from: collections)
+        for i in books.indices where books[i].collectionIDs?.contains(id) == true {
+            let list = books[i].collectionList.filter { $0 != id }
+            books[i].collectionIDs = list.isEmpty ? nil : list
+        }
+        if case .collection(let selected) = shelfScope, selected == id { setScope(.all) }
+        save()
+    }
+
+    /// 分類を別の分類の下へ移す。**自分の子孫は親に選べない**（輪になると木がたどれなくなる）。
+    func moveCollection(id: UUID, under newParent: UUID?) {
+        guard let idx = collections.firstIndex(where: { $0.id == id }) else { return }
+        if let p = newParent {
+            guard p != id, collections.contains(where: { $0.id == p }),
+                  !CollectionTree.isDescendant(p, of: id, in: collections) else { return }
+        }
+        collections[idx].parentID = newParent
+        collections[idx].order = CollectionTree.nextOrder(under: newParent, in: collections)
+        save()
+    }
+
+    func setMembership(bookID: UUID, collectionID: UUID, member: Bool) {
+        setMembership(bookIDs: [bookID], collectionID: collectionID, member: member)
+    }
+
+    /// まとめて入れる／外す。1冊ずつ呼ぶと保存の予約もそのぶん立つので、複数はここへ。
+    func setMembership(bookIDs: [UUID], collectionID: UUID, member: Bool) {
+        guard collections.contains(where: { $0.id == collectionID }) else { return }
+        let targets = Set(bookIDs)
+        var changed = false
+        for i in books.indices where targets.contains(books[i].id) {
+            var list = books[i].collectionList
+            let has = list.contains(collectionID)
+            guard has != member else { continue }
+            if member { list.append(collectionID) } else { list.removeAll { $0 == collectionID } }
+            books[i].collectionIDs = list.isEmpty ? nil : list
+            changed = true
+        }
+        if changed { save() }
+    }
+
+    func setScope(_ scope: ShelfScope) {
+        shelfScope = scope
+        UserDefaults.standard.set(scope.storageString, forKey: scopeKey)
+    }
+
+    /// その棚に出す本。分類は**子孫の分類に入っている本も含む**（階層の上を選べば下も見える）。
+    func books(in scope: ShelfScope) -> [BookEntry] {
+        switch scope {
+        case .all:
+            return books
+        case .favorites:
+            return books.filter(\.favorite)
+        case .unfiled:
+            return books.filter { $0.collectionList.isEmpty }
+        case .collection(let id):
+            guard collections.contains(where: { $0.id == id }) else { return [] }
+            let ids = CollectionTree.selfAndDescendants(of: id, in: collections)
+            return books.filter { !ids.isDisjoint(with: $0.collectionList) }
+        }
+    }
+
+    /// サイドバーに出す冊数。1冊ずつ棚を数え直すと分類の数だけ全冊を走ることになるので、
+    /// **全冊を1回だけ走って**まとめて数える。
+    func shelfCounts() -> [ShelfScope: Int] {
+        var counts: [ShelfScope: Int] = [.all: books.count, .favorites: 0, .unfiled: 0]
+        for c in collections { counts[.collection(c.id)] = 0 }
+
+        // 分類 → 自分と祖先ぜんぶ。親の棚には子の本も出るので、1冊は所属先の祖先すべてで数える。
+        let parents = Dictionary(uniqueKeysWithValues: collections.map { ($0.id, $0.parentID) })
+        var chain: [UUID: [UUID]] = [:]
+        for c in collections {
+            var line: [UUID] = []
+            var cur: UUID? = c.id
+            var seen: Set<UUID> = []
+            while let id = cur, seen.insert(id).inserted {   // 輪になっていても止まる
+                line.append(id)
+                cur = parents[id] ?? nil
+            }
+            chain[c.id] = line
+        }
+
+        var bucket: Set<UUID> = []
+        for b in books {
+            if b.favorite { counts[.favorites, default: 0] += 1 }
+            let list = b.collectionList
+            if list.isEmpty { counts[.unfiled, default: 0] += 1; continue }
+            // 「小説」と「小説/SF」の両方に入れてある本を親で二重に数えないよう、一度集める。
+            bucket.removeAll(keepingCapacity: true)
+            for id in list { bucket.formUnion(chain[id] ?? []) }
+            for id in bucket { counts[.collection(id), default: 0] += 1 }
+        }
+        return counts
+    }
+
     // MARK: メタデータのバックフィル（旧データに作者・出版社が無い場合）
 
     private var didBackfill = false
+    /// 1回の起動で埋め直す上限。
+    ///
+    /// 1冊ごとに使い捨ての WKWebView を立てるので、数百冊ぶんを起動直後にまとめて走らせると
+    /// 書棚が触れなくなる（実データで対象 91 冊）。少しずつ埋めて、残りは次の起動に回す。
+    private static let backfillBatchLimit = 25
+
     /// 作者/出版社が未取得の本について、EPUB を開いて埋める（既存データを壊さず追記）。
     func backfillMetadataIfNeeded() {
         guard !didBackfill else { return }
@@ -454,17 +689,26 @@ final class AppModel: ObservableObject {
         // 作者/出版社/読み(authorSort)/表紙のいずれかが未取得の本を対象にする。
         // （表紙は probe が失敗した本で丸ごと欠けるため、メタと同じ経路で埋め直す。）
         let targets = books.filter { b in
-            guard b.fileExists else { return false }
+            // 一度調べた本は結果が空でも二度と調べない（持っていないのが正しい本があるため）。
+            guard b.metaProbed != true, b.fileExists else { return false }
             let missingMeta = b.author == nil && b.publisher == nil
             let missingSort = b.author != nil && b.authorSort == nil
             let missingCover = b.coverFileName == nil
             return missingMeta || missingSort || missingCover
-        }
+        }.prefix(Self.backfillBatchLimit)
         guard !targets.isEmpty else { return }
-        Task {
+
+        // 取り込みと同じ列に並べる。EpubProbe は使い捨ての WebView を1個ずつ立てる作りなので、
+        // フォルダ一括登録と重なって並走すると両方が破綻する。
+        enqueueProbeWork { [weak self] in
+            guard let self else { return }
             for book in targets {
-                guard let meta = await EpubProbe.probe(url: book.fileURL) else { continue }
+                if Task.isCancelled { break }
+                let meta = await EpubProbe.probe(url: book.fileURL)
                 guard let idx = books.firstIndex(where: { $0.id == book.id }) else { continue }
+                // 開けた／開けなかったに関わらず「調べた」と記す。開けない本を毎回開き直さない。
+                books[idx].metaProbed = true
+                guard let meta else { continue }
                 if let a = meta.author { books[idx].author = a }
                 if let p = meta.publisher { books[idx].publisher = p }
                 if let sa = meta.authorSort { books[idx].authorSort = sa }
@@ -583,12 +827,8 @@ final class AppModel: ObservableObject {
 
     // MARK: カバー保存場所
 
-    private var coversDir: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("EpubReaderSpike/Covers", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return base
-    }
+    /// 表紙の置き場所。**書棚ごとに分ける**（表紙は装丁そのもの＝どの本を持っているかが一目で分かる）。
+    private var coversDir: URL { ProfileLocation.shared.coversDirectory }
 
     /// 表示済みカバーのメモリキャッシュ。ディスクの PNG は 400x600 あるが、書棚のセルは
     /// 150x220pt（Retina で 300x440px）でしか見えない。SwiftUI は body 評価のたびに
@@ -606,9 +846,9 @@ final class AppModel: ObservableObject {
         let url = coversDir.appendingPathComponent(name)
         guard let image = Self.downsampledImage(at: url, maxPixels: Self.coverThumbnailPixels)
         else { return nil }
-        // コストはおおよそのピクセル数。総量が増えたら OS が古いものから捨てる。
-        coverCache.setObject(image, forKey: key,
-                             cost: Int(image.size.width * image.size.height))
+        // コストは実際に抱えるピクセルのバイト数。上限（load で設定）を超えたぶんから捨てられる。
+        let px = image.size.width * image.scale * image.size.height * image.scale
+        coverCache.setObject(image, forKey: key, cost: Int(px) * 4)
         return image
     }
 
@@ -633,29 +873,168 @@ final class AppModel: ObservableObject {
         coverCache.removeObject(forKey: name as NSString)
     }
 
-    // MARK: 本を開く
+    // MARK: 本を開く／まとめて取り込む
 
     func open(url: URL) {
-        Task { await register(url: url, thenOpen: true) }
+        // 既に書棚にある本は取り込みの列に並ばせず、すぐ開く（メタ抽出が要らないため、
+        // フォルダの一括登録が走っている最中でも待たされない）。
+        if let existing = books.first(where: { $0.path == url.path }) {
+            var e = existing
+            e.lastOpenedAt = Date()
+            replace(e)
+            openedBook = e
+            return
+        }
+        enqueueImport([url], openFirst: true, announces: false)
+    }
+
+    /// ドロップやファイルパネルで受け取った URL 群を書棚へ入れる。
+    ///
+    /// フォルダは呼び出し側（BookDrop / ImportableBook.expand）で中身へ展開済みの前提。
+    /// 1冊だけのときは従来どおり開き、複数のときは開かずに書棚へ積む
+    ///（何十冊も一度に開きようがないため）。
+    func add(urls: [URL], openIfSingle: Bool = true) {
+        let files = ImportableBook.expand(urls)
+        guard !files.isEmpty else {
+            report(String(localized: "登録できるファイルがありませんでした"))
+            return
+        }
+        if files.count == 1, openIfSingle {
+            open(url: files[0])
+            return
+        }
+        enqueueImport(files, openFirst: false, announces: true)
     }
 
     /// 同梱サンプルを初回だけ書棚に登録（開発時にすぐ試せるように）。
     /// 縦書きサンプルに加え、画像位置・余白の測定用メジャー本もシードする。
     func seedSampleIfNeeded() {
+        // 増やした書棚は**空のまま**にする。人へ見せるために作った書棚に、頼んでいない本を
+        // 入れない（実際、印を付けずに作ると空の書棚がサンプル2冊で始まった）。
+        guard currentProfileID == ShelfProfile.primaryID else { return }
         let seededKey = "library.seeded.v2"
         guard books.isEmpty, !UserDefaults.standard.bool(forKey: seededKey) else { return }
         UserDefaults.standard.set(true, forKey: seededKey)
         let names = ["sample-vertical", "ruler-measure"]
-        Task {
-            for name in names {
-                if let url = Bundle.main.url(forResource: name, withExtension: "epub") {
-                    await register(url: url, thenOpen: false)
-                }
-            }
+        let urls = names.compactMap { Bundle.main.url(forResource: $0, withExtension: "epub") }
+        // 初回起動の帯は出さない（利用者が頼んだ取り込みではないため）。
+        enqueueImport(urls, openFirst: false, announces: false)
+    }
+
+    // MARK: 取り込みの進み具合
+
+    /// まとめて登録しているあいだの進み具合（BookImportBanner が出す）。
+    struct ImportProgress: Equatable {
+        var done = 0
+        var total = 0
+        var added = 0
+        var skipped = 0
+        var failed = 0
+        /// いま処理しているファイル名。
+        var current = ""
+
+        var fraction: Double { total > 0 ? Double(done) / Double(total) : 0 }
+    }
+
+    @Published var importProgress: ImportProgress?
+    /// 取り込みが終わったときの短い報告（数秒で自動的に消える）。
+    @Published var importReport: String?
+
+    /// 取り込みは一列に並べて順に走らせる。EpubProbe が1冊ごとに使い捨ての WebView を立てるので、
+    /// フォルダの中身を一斉に走らせるとメモリも CPU も破綻する（probe 自身も直列化を求めている）。
+    private var importChain: Task<Void, Never>?
+    /// 「中止」の旗。列に並んでいる取り込みまで含めて降ろすため、Task の cancel と別に持つ。
+    private var importCancelled = false
+    private var reportClearTask: Task<Void, Never>?
+
+    private func enqueueImport(_ urls: [URL], openFirst: Bool, announces: Bool) {
+        guard !urls.isEmpty else { return }
+        // 新しく頼まれた取り込みは、前の「中止」を引きずらない。
+        importCancelled = false
+        enqueueProbeWork { [weak self] in
+            await self?.runImport(urls, openFirst: openFirst, announces: announces)
         }
     }
 
-    private func register(url: URL, thenOpen: Bool) async {
+    /// EPUB を開いて調べる作業（取り込み・メタの埋め直し）を1本の列に並べる。
+    /// `EpubProbe` は1冊ごとに使い捨ての WebView を立てるので、並走させるとメモリも CPU も破綻する。
+    private func enqueueProbeWork(_ work: @escaping @MainActor () async -> Void) {
+        let previous = importChain
+        importChain = Task { @MainActor in
+            _ = await previous?.value
+            await work()
+        }
+    }
+
+    /// 取り込みを中断する（フォルダを取り違えたときの逃げ道）。並んでいる分もまとめて降ろす。
+    ///
+    /// 走っているのは列の**先頭**の Task で、`importChain` が持っているのは**末尾**なので、
+    /// Task の cancel だけでは今動いている取り込みは止まらない。合図は旗で回す。
+    func cancelImport() {
+        importCancelled = true
+        importChain?.cancel()
+    }
+
+    private func runImport(_ urls: [URL], openFirst: Bool, announces: Bool) async {
+        // 待っているあいだに中止されたぶんは、黙って降ろす（報告は止めた本人に既に出ている）。
+        guard !importCancelled else { return }
+        var p = ImportProgress(total: urls.count)
+        // 1冊だけの取り込み（ドロップやメニューから開くとき）は帯を出さない。
+        let showsBanner = announces && urls.count > 1
+        if showsBanner { importProgress = p }
+        defer { if showsBanner { importProgress = nil } }
+
+        var cancelled = false
+        for (i, url) in urls.enumerated() {
+            if importCancelled || Task.isCancelled { cancelled = true; break }
+            p.current = url.lastPathComponent
+            if showsBanner { importProgress = p }
+            switch await register(url: url, thenOpen: openFirst && i == 0) {
+            case .added: p.added += 1
+            case .alreadyRegistered: p.skipped += 1
+            case .unreadable: p.failed += 1
+            }
+            p.done += 1
+            if showsBanner { importProgress = p }
+        }
+        // 一括登録は1冊ごとの保存をまとめているので、終わったところで必ず書き切る。
+        flushPendingSaves()
+        guard announces else { return }
+        report(Self.reportText(for: p, cancelled: cancelled))
+    }
+
+    /// 取り込み結果の一文。「何冊入ったか」を主に、対処が要る数（登録済み・読めなかった）を添える。
+    private static func reportText(for p: ImportProgress, cancelled: Bool) -> String {
+        var text = cancelled
+            ? String(format: String(localized: "取り込みを中止しました（%lld冊を追加）"), Int64(p.added))
+            : String(format: String(localized: "%lld冊を書棚に追加しました"), Int64(p.added))
+        var notes: [String] = []
+        if p.skipped > 0 {
+            notes.append(String(format: String(localized: "%lld冊は登録済み"), Int64(p.skipped)))
+        }
+        if p.failed > 0 {
+            notes.append(String(format: String(localized: "%lld冊は読めませんでした"), Int64(p.failed)))
+        }
+        if !notes.isEmpty { text += "（" + notes.joined(separator: "・") + "）" }
+        return text
+    }
+
+    /// 帯に短い報告を出す。次の報告が来るか、一定時間で消える。
+    private func report(_ text: String) {
+        importReport = text
+        reportClearTask?.cancel()
+        reportClearTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.importReport = nil
+        }
+    }
+
+    /// 1冊分の登録結果。取り込みの報告（追加/登録済み/読めず）に使う。
+    enum RegisterResult { case added, alreadyRegistered, unreadable }
+
+    @discardableResult
+    private func register(url: URL, thenOpen: Bool) async -> RegisterResult {
         // ドロップ/ピッカー由来のURLは念のためアクセス開始（sandbox無効でも無害）。
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -666,7 +1045,13 @@ final class AppModel: ObservableObject {
             e.lastOpenedAt = Date()
             replace(e)
             if thenOpen { openedBook = e }
-            return
+            return .alreadyRegistered
+        }
+
+        // 消えた本・読めない本を書棚へ足さない（フォルダ一括だと気付けないため先に弾く）。
+        guard FileManager.default.isReadableFile(atPath: url.path) else {
+            dlog("[Import] unreadable \(url.lastPathComponent)")
+            return .unreadable
         }
 
         // 新規: タイトル・作者・出版社・カバーを取得（foliate のオフスクリーンパーサ）。
@@ -688,15 +1073,18 @@ final class AppModel: ObservableObject {
             }
         }
 
-        let entry = BookEntry(
+        var entry = BookEntry(
             id: id, path: url.path, title: title,
             addedAt: Date(), lastOpenedAt: Date(),
             locatorJSON: nil, coverFileName: coverName,
             author: author, publisher: publisher, authorSort: authorSort
         )
+        // 登録時に調べ終えている。起動のたびの埋め直しの対象にしない。
+        entry.metaProbed = true
         books.insert(entry, at: 0)
         save()
         if thenOpen { openedBook = entry }
+        return .added
     }
 
     // MARK: 読書位置の記憶
@@ -711,11 +1099,106 @@ final class AppModel: ObservableObject {
         save()
     }
 
+    // MARK: 書棚（プロファイル）の切り替えと管理
+
+    private var profileIndex: ProfileIndex {
+        ProfileIndex(profiles: profiles, currentID: currentProfileID)
+    }
+
+    var currentProfile: ShelfProfile? { profiles.first { $0.id == currentProfileID } }
+
+    private func persistProfiles() {
+        profileStore.save(profileIndex)
+    }
+
+    /// 書棚を切り替える。
+    ///
+    /// **見落としが漏洩そのものになる作業なので、手放すものをここに一列で並べてある。**
+    /// 前の書棚のものが顔を出す経路は蔵書の一覧だけではない——書棚の地（最後に開いた本の表紙）・
+    /// 「続きを読む」段・表紙のメモリキャッシュ・読み辞書・共通CSS・対訳の貯め・走っている
+    /// 取り込みが、それぞれ別の場所を握っている。
+    func switchProfile(to id: UUID) {
+        guard id != currentProfileID, profiles.contains(where: { $0.id == id }) else { return }
+
+        // 1. 走っているものを降ろす。取り込みが特に大事で、続けさせると**切り替えた先の書棚へ
+        //    前の書棚の本が入る**。
+        cancelImport()
+        autoPager.stop()
+        activeReader?.stopSpeaking()
+
+        // 2. いまの書棚へ書き切ってから離れる（読書位置は溜めてあるので、ここで落とさない）。
+        flushPendingSaves()
+
+        // 3. 本を閉じる。リーダーが前の書棚の本を握ったままにしない。
+        openedBook = nil
+        activeReader = nil
+
+        // 4. 見る先を移す。ここから下の保存先の解決はすべて新しい書棚を指す。
+        ProfileLocation.shared.move(to: id)
+        currentProfileID = id
+        persistProfiles()
+
+        // 5. 前の書棚のものを抱えている入れ物を空にする。
+        store = LibraryStore()
+        coverCache.removeAllObjects()
+        // 開いていた本の「解決済みCSS」は本ごとの指定を含む。次に本を開くまで残さない。
+        UserDefaults.standard.removeObject(forKey: EpubOpener.activeCSSKey)
+        Task { await TranslationCache.shared.detach() }
+
+        // 6. 新しい書棚を読む。読めなかったときに前の蔵書が残らないよう、先に空にしてから読む。
+        books = []
+        collections = []
+        shelfScope = .all
+        didBackfill = false   // 新しい書棚の本もメタの埋め直しの対象にする
+        load()
+        libraryRevision &+= 1
+
+        // 7. 気付けるようにする。書棚が空になったのを「蔵書が消えた」と誤解しないため。
+        let name = currentProfile?.name ?? ""
+        report(String(format: String(localized: "書棚「%@」に切り替えました"), name))
+    }
+
+    /// 書棚を足す。**中身は空**（同梱サンプルも入れない）。
+    @discardableResult
+    func addProfile(name: String) -> ShelfProfile? {
+        var index = profileIndex
+        guard let created = index.add(name: name) else { return nil }
+        profiles = index.profiles
+        persistProfiles()
+        return created
+    }
+
+    @discardableResult
+    func renameProfile(_ id: UUID, to name: String) -> Bool {
+        var index = profileIndex
+        guard index.rename(id, to: name) else { return false }
+        profiles = index.profiles
+        persistProfiles()
+        return true
+    }
+
+    func canRemoveProfile(_ id: UUID) -> Bool { profileIndex.canRemove(id) }
+
+    /// 書棚を消す。**保存先は消さずに `Profiles/Deleted/` へ寄せる**（`ProfileLocation.retire`）。
+    /// 中身は「どの本を登録したか・どこまで読んだか」で、EPUB 本体と違って作り直せない。
+    @discardableResult
+    func removeProfile(_ id: UUID) -> Bool {
+        var index = profileIndex
+        guard index.remove(id) else { return false }
+        profiles = index.profiles
+        persistProfiles()
+        ProfileLocation.shared.retire(id)
+        ProfileDefaults.removeAll(for: id)
+        return true
+    }
+
     // MARK: 書棚操作
 
     func closeBook() {
         openedBook = nil
         books.sort { $0.lastOpenedAt > $1.lastOpenedAt }
+        // 読んでいるあいだに溜めた位置をここで書き切る（次に落ちても読書位置を失わない）。
+        flushPendingSaves()
     }
 
     func remove(_ book: BookEntry) {

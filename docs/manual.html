@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>マニュアル — 縦書き EPUB リーダー tategaki-reader</title>
+<meta name="description" content="tategaki-reader の使い方。インストール、本の追加、書棚、表示の切り替え、読み上げと読み辞書、自動ページ送り、スリープタイマー、音声・朗読動画の書き出し、キーボードショートカット。">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<a class="skip-link" href="#main">本文へ移動</a>
+
+<header class="masthead">
+  <div class="wrap masthead__inner">
+    <a class="brand" href="./">
+      <span class="brand__mark">縦</span>
+      <span class="brand__name">縦書き EPUB リーダー</span>
+      <span class="brand__latin">tategaki-reader</span>
+    </a>
+    <nav class="navlinks" aria-label="サイト内">
+      <a href="./" class="is-optional">トップ</a>
+      <a href="manual.html" aria-current="page">マニュアル</a>
+      <a href="https://github.com/veltrea/tategaki-reader">GitHub</a>
+      <a href="https://github.com/veltrea/tategaki-reader/releases" class="navlinks__cta">入手する</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap manual" id="main">
+
+  <!-- 柱 -->
+  <nav class="toc" aria-label="目次">
+    <h2>目次</h2>
+    <ol>
+      <li><a href="#install">動作環境とインストール</a></li>
+      <li><a href="#quickstart">最初の五分</a></li>
+      <li><a href="#add">本を追加する</a></li>
+      <li><a href="#shelf">書棚を使う</a></li>
+      <li><a href="#read">本を読む</a></li>
+      <li><a href="#display">見え方を変える</a></li>
+      <li><a href="#speech">読み上げ</a></li>
+      <li><a href="#dictionary">読み上げ辞書</a></li>
+      <li><a href="#autopager">自動ページ送り</a></li>
+      <li><a href="#sleep">スリープタイマー</a></li>
+      <li><a href="#export">音声と動画の書き出し</a></li>
+      <li><a href="#profiles">書棚を切り替える</a></li>
+      <li><a href="#settings">環境設定</a></li>
+      <li><a href="#shortcuts">ショートカット一覧</a></li>
+      <li><a href="#trouble">うまくいかないとき</a></li>
+    </ol>
+  </nav>
+
+  <div class="manual__body">
+
+    <div class="sec-head" style="margin-bottom:2.5rem">
+      <div class="sec-num">手引</div>
+      <div>
+        <h2>マニュアル</h2>
+        <p>導入から書き出しまで。読みながら手を動かせる順に並べてあります。画面写真はすべて実際のアプリのものです。</p>
+      </div>
+    </div>
+
+    <!-- 一 -->
+    <section id="install">
+      <h3>一　動作環境とインストール</h3>
+
+      <dl class="deflist">
+        <dt>動作環境</dt>
+        <dd>macOS 13 Ventura 以降（Mac Catalyst アプリ）。Apple Silicon / Intel の両方で動きます。</dd>
+        <dt>扱えるファイル</dt>
+        <dd>EPUB（<code>.epub</code>）。フォルダを渡した場合は、サブフォルダまで探して中の EPUB をまとめて登録します。</dd>
+        <dt>読み上げに必要なもの</dt>
+        <dd><a href="https://voicevox.hiroshiba.jp/">VOICEVOX</a> または <a href="https://aivis-project.com/">AivisSpeech</a>。読ませないなら不要です。</dd>
+      </dl>
+
+      <h4>入れる</h4>
+      <ol class="steps">
+        <li><a href="https://github.com/veltrea/tategaki-reader/releases">Releases</a> からダウンロードします（DMG、0.2.0 以前は ZIP）。</li>
+        <li>DMG なら開いて <code>EpubReaderSpike.app</code> を <code>Applications</code> へドラッグ、ZIP なら展開して <code>/Applications</code> へ入れます。</li>
+        <li>初回だけ、<strong>右クリック →「開く」</strong>（ダブルクリックでは開けません）→ もう一度「開く」。</li>
+      </ol>
+
+      <p>
+        システム設定 → プライバシーとセキュリティ →「このまま開く」でも構いません。コマンドでよければ次のとおりです。
+      </p>
+<pre><code>xattr -dr com.apple.quarantine /Applications/EpubReaderSpike.app</code></pre>
+
+      <div class="note">
+        <strong>なぜこの操作が要るのか。</strong>
+        Apple Developer アカウント（年 $99）を使わない ad-hoc 署名で配布しているためです。
+        配布物の署名は固定なので、一度許可すれば以降はそのまま起動します。
+      </div>
+    </section>
+
+    <!-- 二 -->
+    <section id="quickstart">
+      <h3>二　最初の五分</h3>
+
+      <p>細かい設定は後回しにして、まず読めるところまで進みます。</p>
+
+      <ol class="steps">
+        <li>アプリを起動します。空の書棚と、動作確認用の見本が入った状態で始まります。</li>
+        <li>手持ちの EPUB（またはそれが入ったフォルダ）を<strong>ウィンドウへドラッグ＆ドロップ</strong>します。</li>
+        <li>表紙をダブルクリックして開きます。縦書きの本なら、そのまま右から左へ読める状態で出ます。</li>
+        <li>ページを送るのは<strong>矢印キー</strong>か<strong>マウスホイール</strong>。<kbd>⌘=</kbd> と <kbd>⇧⌘-</kbd> で文字の大きさを合わせます。</li>
+        <li>読み上げを使うなら VOICEVOX を起動し、<kbd>⌘,</kbd> の「読み上げ」タブで<strong>接続済み</strong>を確かめてから、本文を<strong>ダブルクリック</strong>します。</li>
+      </ol>
+
+      <figure>
+        <a href="assets/img/reader-text.webp" title="原寸で開く"><img src="assets/img/reader-text.webp" width="1600" height="835" loading="lazy"
+             alt="縦書きの本文が右から左へ流れているリーダーの画面"></a>
+        <figcaption><b>読んでいるところ。</b>本文は縦組みで、ルビもそのまま出ます。画面の端まで使い、余計なものは出しません（ツールバーはマウスを上へ動かすと現れます）。</figcaption>
+      </figure>
+
+      <p>
+        ここから先は、必要になったところだけ読めば十分です。
+        「本が増えてきた」なら<a href="#shelf">三章</a>、「見え方を変えたい」なら<a href="#display">六章</a>、
+        「聴きながら眠りたい」なら<a href="#sleep">十章</a>へ。
+      </p>
+    </section>
+
+    <!-- 三 -->
+    <section id="add">
+      <h3>三　本を追加する</h3>
+
+      <p>どれも同じ経路を通ります。使いやすいものをどうぞ。</p>
+
+      <ul class="feature-list">
+        <li><strong>ドラッグ＆ドロップ</strong> — EPUB やフォルダをウィンドウへ落とす。1 冊だけ落とした場合はそのまま開きます</li>
+        <li><strong>「本を追加」ボタン</strong> — 書棚の右上。「ファイルを選ぶ…」と「フォルダを選ぶ…」があります</li>
+        <li><strong>ファイル &gt; 開く…</strong>（<kbd>⌘O</kbd>）— 本を選ぶパネル。複数選択できます</li>
+        <li><strong>ファイル &gt; フォルダから追加…</strong>（<kbd>⇧⌘O</kbd>）— フォルダの中身をまとめて登録します</li>
+        <li><strong>Finder から</strong> — <code>.epub</code> をダブルクリック、あるいはアプリのアイコンへ落とす</li>
+      </ul>
+
+      <div class="note">
+        本とフォルダは、同じパネルでは混ぜて選べません（macOS のファイルパネルがフォルダを「潜る先」として扱うため）。
+        だから入口を「ファイルを選ぶ」と「フォルダを選ぶ」に分けてあります。
+      </div>
+
+      <p>
+        まとめて登録している間は、画面の上に進み具合の帯が出ます。読み込みは 1 冊ずつ順番に進むので、
+        数百冊を一度に落としても操作は止まりません。
+      </p>
+      <p>
+        EPUB ファイルは<strong>元の場所から動かしません</strong>。アプリの中へコピーせず、置いてある場所を読みにいきます。
+        あとからファイルを移動・削除すると、書棚には残ったまま「ファイルが見つかりません」と出ます。
+      </p>
+    </section>
+
+    <!-- 四 -->
+    <section id="shelf">
+      <h3>四　書棚を使う</h3>
+
+      <figure>
+        <a href="assets/img/shelf-grid.webp" title="原寸で開く"><img src="assets/img/shelf-grid.webp" width="1600" height="835" loading="lazy"
+             alt="表紙を並べた書棚の画面。左にサイドバー、上に「続きを読む」の段"></a>
+        <figcaption><b>書棚（グリッド）。</b>左のサイドバーに「すべての本・お気に入り・未分類」と自分で作った分類が並びます。上段は最後に読んでいた本で、読了率つきで「続きを読む」から再開できます。表紙の左下の数字が読了率です。</figcaption>
+      </figure>
+
+      <h4>探す・並べる</h4>
+      <ul class="feature-list">
+        <li><strong>フィルタ</strong> — 上の検索欄。対象は「すべて／タイトル／作者／出版社」から選べます</li>
+        <li><strong>並び替え</strong> — 最近開いた／タイトル／作者／出版社</li>
+        <li><strong>表示</strong> — 「グリッド」と「作者別」。右上の 2 つのボタンで切り替えます</li>
+      </ul>
+
+      <figure>
+        <a href="assets/img/shelf-author.webp" title="原寸で開く"><img src="assets/img/shelf-author.webp" width="1600" height="835" loading="lazy"
+             alt="作者別表示。あ・か・た… の見出しで区切られた書棚"></a>
+        <figcaption><b>作者別表示。</b>作者の読みの五十音で束ねて並べます。読みが取れない本は「他」に入るので、本を右クリック →「作者の読みを設定…」でかなを入れておくと、正しい行へ移ります。</figcaption>
+      </figure>
+
+      <h4>分類（コレクション）</h4>
+      <p>
+        サイドバーの「分類」の <code>+</code>、または本を右クリック →「分類 &gt; 新しい分類に入れる…」で作ります。
+        分類は<strong>入れ子</strong>にでき、名前の変更・最上位への移動・削除ができます。
+        分類を消しても本は消えません（「未分類」へ戻るだけです）。
+      </p>
+
+      <h4>本を右クリックしてできること</h4>
+      <ul class="feature-list">
+        <li>お気に入りに追加／外す</li>
+        <li>分類に入れる（その場で新しい分類を作れます）</li>
+        <li><strong>作者の読みを設定…</strong> — 五十音インデックスの並びに使います。空欄にすると EPUB の情報に戻ります</li>
+        <li>書棚から削除（EPUB ファイル自体は消えません）</li>
+      </ul>
+    </section>
+
+    <!-- 五 -->
+    <section id="read">
+      <h3>五　本を読む</h3>
+
+      <h4>ページを送る</h4>
+      <div class="table-scroll">
+        <table>
+          <caption>本文にフォーカスがあるときの操作</caption>
+          <tbody>
+            <tr><th>矢印キー</th><td>ページを送る／戻す</td></tr>
+            <tr><th>マウスホイール</th><td>ページを送る／戻す</td></tr>
+            <tr><th><kbd>⌘]</kbd> / <kbd>⌘[</kbd></th><td>次のページ／前のページ</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        メニューの「次」「前」は<strong>綴じ方向に依らない論理的な向き</strong>です。
+        縦書き・右綴じの本では左右の意味が反転するため、矢印キーは本文側の処理に任せ、メニューには割り当てていません。
+      </p>
+
+      <h4>ツールバー</h4>
+      <figure>
+        <a href="assets/img/reader-toolbar.webp" title="原寸で開く"><img src="assets/img/reader-toolbar.webp" width="1600" height="835" loading="lazy"
+             alt="リーダー上部のツールバーが表示された状態"></a>
+        <figcaption><b>ツールバーは読書中は隠れます。</b>マウスを画面の上へ動かすと現れます。左から「書棚へ戻る」「目次」、右端に「検索」「しおりを追加」「書字方向」「文字サイズ・配色」。画像ページを見ているときだけ「見開きをずらす」も出ます。</figcaption>
+      </figure>
+
+      <h4>目次</h4>
+      <figure>
+        <a href="assets/img/reader-toc.webp" title="原寸で開く"><img src="assets/img/reader-toc.webp" width="1600" height="835" loading="lazy"
+             alt="左に目次サイドバーを開いた画面"></a>
+        <figcaption><b>目次。</b>ツールバー左のボタンで開きます。項目を選ぶとその場所へ飛びます。EPUB に目次が入っていない本では「この本には目次がありません。」と出ます（青空文庫由来の本にはよくあります）。</figcaption>
+      </figure>
+
+      <h4>しおり</h4>
+      <p>
+        現在ページに挟むなら、ツールバーのしおりボタンか「移動 &gt; しおりを追加」。
+        本文で<strong>文を選んで右クリック</strong>すると、その一文に対して挟めます。
+      </p>
+
+      <figure>
+        <a href="assets/img/reader-contextmenu.webp" title="原寸で開く"><img src="assets/img/reader-contextmenu.webp" width="1600" height="835" loading="lazy"
+             alt="本文を選択して右クリックしたときのメニュー"></a>
+        <figcaption><b>選んだ文を右クリック。</b>「しおりを追加」と「読み上げ辞書に登録」が出ます。選択に対して挟んだしおりは、一覧に<b>その文がそのまま</b>並ぶので、後から探すときの手がかりになります。</figcaption>
+      </figure>
+
+      <figure>
+        <a href="assets/img/reader-bookmarks.webp" title="原寸で開く"><img src="assets/img/reader-bookmarks.webp" width="1600" height="835" loading="lazy"
+             alt="左にしおり一覧を開いた画面"></a>
+        <figcaption><b>しおり一覧（移動 &gt; しおりを開く）。</b>読了率と日付つきで並びます。「現在地をしおり」でその場を足せます。目次とは排他で、どちらか一方が開きます。</figcaption>
+      </figure>
+
+      <h4>本文を検索</h4>
+      <figure>
+        <a href="assets/img/reader-search.webp" title="原寸で開く"><img src="assets/img/reader-search.webp" width="1600" height="835" loading="lazy"
+             alt="本文検索の結果一覧と、本文中の該当箇所が赤枠で示された画面"></a>
+        <figcaption><b>検索（<kbd>⌘F</kbd>）。</b>語を入れて <kbd>Enter</kbd>。前後の文つきで結果が並び、いま表示しているページの該当箇所には枠が付きます。結果を選ぶとその場所へ飛びます。本を開いている間だけ使えます。</figcaption>
+      </figure>
+
+      <p>読書位置は自動で保存されます。書棚へ戻ったとき、ウィンドウを閉じたとき、アプリを終了するときに書き込まれます。</p>
+    </section>
+
+    <!-- 六 -->
+    <section id="display">
+      <h3>六　見え方を変える</h3>
+
+      <p>メニューバーの<strong>「表示」</strong>に、環境設定の「表示」タブと同じ項目が並んでいます。シートを開かずに切り替えられます。</p>
+
+      <figure class="fig--inset">
+        <a href="assets/img/menu-view.webp" title="原寸で開く"><img src="assets/img/menu-view.webp" width="560" height="460" loading="lazy"
+             alt="表示メニューを開いたところ"></a>
+        <figcaption><b>表示メニュー。</b>文字サイズ・行間・テーマ・表示モード・書字方向・綴じ方向・見開き・画像の比率が、すべてここに出ます。</figcaption>
+      </figure>
+
+      <div class="table-scroll">
+        <table>
+          <caption>表示メニューの項目</caption>
+          <thead><tr><th>項目</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><th>文字サイズ</th><td>大きく <kbd>⌘=</kbd> ／ 小さく <kbd>⇧⌘-</kbd> ／ 標準に戻す <kbd>⌘0</kbd></td></tr>
+            <tr><th>行間</th><td>広く／狭く／標準に戻す</td></tr>
+            <tr><th>テーマ</th><td>自動／ライト／セピア／ダーク</td></tr>
+            <tr><th>表示モード</th><td>読みやすさ優先／EPUB のまま</td></tr>
+            <tr><th>書字方向</th><td>自動／縦書き／横書き</td></tr>
+            <tr><th>綴じ方向</th><td>自動／右綴じ／左綴じ</td></tr>
+            <tr><th>画像ページの見開き</th><td>自動／常に見開き／常に単ページ</td></tr>
+            <tr><th>本文の見開き</th><td>自動／常に見開き／常に単ページ</td></tr>
+            <tr><th>画像の比率</th><td>固定しない／この本の判型／判型を選ぶ／任意の比率…（本を開いているときだけ）</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <strong>効き先は状況で変わります。</strong>
+        本を開いているとき、文字サイズ・行間・テーマ・表示モードは<strong>全書籍共通の設定</strong>を書き換え、
+        書字方向・綴じ方向・見開きは<strong>その本の指定</strong>として記憶されます（本ごとに覚えておきたい性質のものだからです）。
+        既定と同じ値を選び直すと、その本だけの指定は持たなくなります（あとで既定を変えたときに追従します）。
+        書棚にいるときは、どれも全書籍の既定を書き換えます。
+      </div>
+
+      <h4>二つの表示モードの使い分け</h4>
+      <dl class="deflist">
+        <dt>読みやすさ優先（既定）</dt>
+        <dd>
+          画像を面いっぱいに広げ、表紙・口絵・章扉のような<strong>画像だけのページ</strong>は自動で見開きに組みます。
+          <code>preserveAspectRatio="none"</code> で潰れた SVG 表紙の比率も直します。
+          縦書き指定が欠けている本は、EBPAJ 由来のクラス名や OPF の <code>primary-writing-mode</code> から推測して補います。
+        </dd>
+        <dt>EPUB のまま</dt>
+        <dd>
+          上の補正を全部止めて、EPUB に書いてあるとおりにエンジンが描いた姿を見ます。
+          配色・文字サイズ・行間は「EPUB のまま」でも効きます。読書のための設定であって、EPUB の解釈ではないからです。
+        </dd>
+      </dl>
+
+      <h4>縦書きにならない本があったら</h4>
+      <p>
+        EPUB の縦書き指定は欠けていることが多く、自動判定が外れることがあります。
+        その本を開いた状態で「表示 &gt; 書字方向 &gt; 縦書き」を選べば、<strong>その本の指定</strong>として覚えます。
+        ツールバーの書字方向ボタンからも同じことができます。
+      </p>
+
+      <h4>見開きがずれているとき</h4>
+      <p>
+        画像ページを表示している間だけ、ツールバーに「見開きをずらす」ボタンが出ます。
+        表紙の後に一枚ずれている本は、これを押すと組み合わせが一つずれて正しい対になります。
+        押して確かめる操作なので、ここだけメニューではなくツールバーに残してあります。
+      </p>
+    </section>
+
+    <!-- 七 -->
+    <section id="speech">
+      <h3>七　読み上げ</h3>
+
+      <h4>準備</h4>
+      <ol class="steps">
+        <li>VOICEVOX（または AivisSpeech）を起動しておきます。</li>
+        <li>アプリの<strong>環境設定</strong>（<kbd>⌘,</kbd>）→「読み上げ」タブを開きます。</li>
+        <li>エンジンを選び、「エンジン状態」が<strong>接続済み</strong>になっていることを確かめます。</li>
+        <li>話者・話速・無音の長さを決めて「保存」。「テスト再生」でその場で聴けます。</li>
+      </ol>
+
+      <figure>
+        <a href="assets/img/settings-audio.webp" title="原寸で開く"><img src="assets/img/settings-audio.webp" width="1600" height="835" loading="lazy"
+             alt="環境設定の読み上げタブ。エンジン状態が接続済みと表示されている"></a>
+        <figcaption><b>環境設定 &gt; 読み上げ。</b>エンジンの URL は自由に書き換えられるので、別のマシンで動かしている VOICEVOX にも繋がります。「無音の長さ」は改行や句読点で入る間の長さで、上げると落ち着いた読み方になります。</figcaption>
+      </figure>
+
+      <p>
+        接続の確認だけならターミナルからでもできます（VOICEVOX の既定ポート）。
+      </p>
+<pre><code>curl -s http://127.0.0.1:50021/version</code></pre>
+
+      <h4>読ませる</h4>
+      <div class="table-scroll">
+        <table>
+          <tbody>
+            <tr><th>本文をダブルクリック</th><td>その語の位置から読み上げを開始する</td></tr>
+            <tr><th><kbd>Space</kbd></th><td>再生／一時停止（一時停止した続きから再開します）</td></tr>
+            <tr><th><kbd>Enter</kbd> / <kbd>Esc</kbd></th><td>停止</td></tr>
+            <tr><th>メニュー「読み上げ」</th><td>読み上げ開始／読み上げ停止／読み上げ辞書…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        読み上げ中は読んでいる箇所が光り、ページの終わりまで来ると自動で次のページへ進みます。
+        文の切れ目ごとに合成するので、長い章でも待たされずに読み始められます。
+      </p>
+      <div class="note">
+        読み上げのキーはメニューに割り当てていません。検索欄などに文字を入力している最中まで
+        <kbd>Space</kbd> や <kbd>Enter</kbd> をメニューに奪われてしまうためです。本文にフォーカスがあるときだけ効きます。
+      </div>
+    </section>
+
+    <!-- 八 -->
+    <section id="dictionary">
+      <h3>八　読み上げ辞書</h3>
+
+      <p>
+        人名や造語など、そのままでは読み間違える語を登録しておく機能です。
+        メニュー「読み上げ &gt; 読み上げ辞書…」で開きます。本文の語を選んで右クリック →「読み上げ辞書に登録」でも入れられます。
+        <strong>読み上げにだけ効き、画面の表示は変わりません。</strong>
+      </p>
+
+      <h4>困るのは「1 文字の名前」</h4>
+      <p>
+        登場人物の名前が<strong>「明」（アキラ）</strong>だとします。
+        そのまま読ませると「メイ」や「アカリ」になってしまうので、辞書に <code>明 → アキラ</code> を登録したくなります。
+        ところが、これを入れた瞬間に<strong>本文中の「明」がすべてアキラになります</strong>。
+      </p>
+      <p style="font-size:.95rem;color:var(--ink-soft)">
+        明日 → <b>アキラ</b>日　／　明確 → <b>アキラ</b>確　／　明暗 → <b>アキラ</b>暗　／　説明 → 説<b>アキラ</b>
+      </p>
+      <p>
+        日本語の読み上げでは<strong>短い語から優先してマッチする</strong>ためで、
+        読み上げエンジン側のユーザー辞書には、これを止める仕組みがありません。
+      </p>
+
+      <h4>解き方：名前を下に、熟語を上に</h4>
+      <p>
+        この辞書は語ごとに<strong>レイヤー（1〜10）</strong>を持ち、<strong>大きいレイヤーから順に</strong>置換します。
+        置換し終えた部分は、下のレイヤーでは二度と触りません。だから手順はこうなります。
+      </p>
+      <ol class="steps">
+        <li><code>明 → アキラ</code> を<strong>低いレイヤー</strong>（たとえば 2）に置く。</li>
+        <li>
+          その作品に出てくる<strong>「明」を含む語</strong>を、<strong>高いレイヤー</strong>（たとえば 8）に登録する。
+          <code>明日→アシタ</code>、<code>明確→メイカク</code>、<code>明暗→メイアン</code>、<code>説明→セツメイ</code> …
+        </li>
+      </ol>
+      <p>
+        こうすると、熟語のほうが先に確定して固まり、<strong>どこにも属さない裸の「明」だけがアキラになります</strong>。
+        小説なら出てくる熟語は限られているので、一度洗い出してしまえば、その本のあいだは読み間違えません。
+      </p>
+
+      <figure>
+        <a href="assets/img/dictionary-entry.webp" title="原寸で開く"><img src="assets/img/dictionary-entry.webp" width="1600" height="835" loading="lazy"
+             alt="読み上げ辞書の登録画面。表記「明」、読み「アキラ」、レイヤー2"></a>
+        <figcaption><b>名前のほうは低いレイヤーに。</b>「表記」は本文中の書き方、「読み」はカタカナ（ひらがなも可）。レイヤーは <b>−</b> / <b>+</b> で上げ下げします。ここでは 5 から 2 まで下げました。上のタブを「パターン」にすると正規表現で書けます。</figcaption>
+      </figure>
+
+      <figure>
+        <a href="assets/img/dictionary-list.webp" title="原寸で開く"><img src="assets/img/dictionary-list.webp" width="1600" height="835" loading="lazy"
+             alt="読み上げ辞書の一覧。レイヤー8に明日・明確・明暗・説明、レイヤー2に明。テスト欄に変換結果"></a>
+        <figcaption>
+          <b>「テスト」でその場に答えが出ます。</b>
+          レイヤー 8 に熟語を四つ、レイヤー 2 に <b>明→アキラ</b> を置いた状態で
+          <b>明は明日、明暗を明確に説明した。</b> と入れると、
+          <b>アキラはアシタ、メイアンをメイカクにセツメイした。</b> になります。
+          熟語はどれも巻き添えにならず、人物の「明」だけが読み替わっています。
+        </figcaption>
+      </figure>
+
+      <div class="note">
+        <strong>熟語の洗い出しには本文検索が使えます。</strong>
+        <kbd>⌘F</kbd> でその字を検索すれば、その本に出てくる用例が前後の文つきで一覧されます。
+        上から拾って登録していけば、取りこぼしが減ります。
+      </div>
+
+      <p>
+        同じレイヤーの中では、表記の長い語から先に確定します。
+        レイヤーを付け忘れても、いきなり短い語に食われる事故は起きにくい作りです。
+      </p>
+
+      <h4>全部を手で登録するのか、という話</h4>
+      <p>
+        正直に言うと、この作業は本来かなり面倒です。長編なら「明」を含む語だけで数十件になりますし、
+        1 件ずつ画面から打ち込むのは骨が折れます。
+      </p>
+      <p>
+        そこでこのアプリは、<strong>辞書そのものを外から操作できるようにしてあります</strong>。
+        アプリは <code>127.0.0.1:47831</code> に 1 行 1 JSON（JSONL）のコマンド口を開いていて、
+        同梱の <strong>MCP サーバー経由で AI エージェントから叩けます</strong>。
+        「本文からその字を含む語を洗い出す → 読みを付けて流し込む → 実際に読み上げへ渡る文字列で検算する」
+        という往復を、人間が 1 件ずつ入力せずに回せます。
+      </p>
+
+      <div class="table-scroll">
+        <table>
+          <caption>辞書まわりのコマンド</caption>
+          <thead><tr><th>コマンド</th><th>すること</th></tr></thead>
+          <tbody>
+            <tr><th><code>dictList</code></th><td>登録済みの全件を<strong>適用順</strong>（レイヤー降順・同レイヤーは長い表記が先）で返す</td></tr>
+            <tr><th><code>dictAdd</code></th><td>語を 1 件足す（表記・読み・レイヤー・区切り・有効）</td></tr>
+            <tr><th><code>dictUpdate</code> / <code>dictDelete</code></th><td>id を指定して直す・消す</td></tr>
+            <tr><th><code>setRules</code></th><td>辞書を丸ごと入れ替える（一括投入）</td></tr>
+            <tr><th><code>applyRules</code></th><td>任意の文に辞書を適用し、<strong>読み上げへ渡る文字列</strong>を返す</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+<pre><code># 語を足す
+python3 scripts/bus.py '{"cmd":"dictAdd","surface":"明暗","reading":"メイアン","layer":8}'
+
+# 読み上げに渡る文字列で検算する
+python3 scripts/bus.py '{"cmd":"applyRules","text":"明は明日、明暗を明確に説明した。"}'
+# → {"ok":true,"text":"アキラはアシタ、メイアンをメイカクにセツメイした。","injectedGaps":[]}</code></pre>
+
+      <p style="font-size:.92rem;color:var(--ink-soft)">
+        辞書は<strong>いま開いている本のリーダー</strong>に紐づくので、コマンドを送る前に本を 1 冊開いておいてください
+        （辞書そのものは書棚ごとに共有されます）。ポートは環境変数 <code>EPUB_TEST_BUS_PORT</code> で変えられます。
+      </p>
+
+      <p>
+        肝心なのは最後の <code>applyRules</code> です。
+        <strong>思ったとおりに読ませられているかを、音を聞かずに文字列で判定できる</strong>ので、
+        エージェント側が自分の登録結果を自分で確かめ、外れていれば直す、という繰り返しが成り立ちます。
+        「意図どおりに読み上げられる辞書」を一冊分そろえるのは、そこまで手間ではありません。
+      </p>
+
+      <div class="note">
+        <strong>使うもの。</strong>
+        MCP サーバーは <a href="https://github.com/veltrea/tategaki-reader/tree/main/mcp/epub-test-mcp"><code>mcp/epub-test-mcp/</code></a>、
+        素の JSONL を投げるだけの小さなクライアントは <a href="https://github.com/veltrea/tategaki-reader/blob/main/scripts/bus.py"><code>scripts/bus.py</code></a> にあります
+        （どちらも Python・外部依存なし）。
+        口はループバック（<code>127.0.0.1</code>）だけに開いていて、外のネットワークからは届きません。
+        受け付けるのも上の辞書まわりのコマンドだけです。
+      </div>
+
+      <h4>そのほかの項目</h4>
+      <ul class="feature-list">
+        <li><strong>パターン</strong> — 正規表現で置き換えます（<code>第(\d+)話</code> のような書き方）</li>
+        <li><strong>前後に区切りを入れる</strong> — 隣の語と続けて解析されるのを防ぎます。区切りで生じる無音は合成前に取り除くので、間延びしません</li>
+        <li><strong>有効</strong> — 消さずに一時的に切っておけます</li>
+        <li><strong>テスト</strong> — 試したい文を入れると、置換の結果がその場に出ます</li>
+      </ul>
+
+      <div class="note">
+        読み上げ辞書は<strong>書棚ごと</strong>に持ちます（<a href="#profiles">十二章</a>）。仕事用の固有名詞を別の書棚へ隔離できます。
+      </div>
+    </section>
+
+    <!-- 九 -->
+    <section id="autopager">
+      <h3>九　自動ページ送り</h3>
+
+      <figure class="fig--inset">
+        <a href="assets/img/menu-autopager.webp" title="原寸で開く"><img src="assets/img/menu-autopager.webp" width="390" height="320" loading="lazy"
+             alt="移動メニューの自動ページ送りサブメニュー"></a>
+        <figcaption><b>移動 &gt; 自動ページ送り。</b>リーダー下部の早送りボタンからも同じ項目が出ます。</figcaption>
+      </figure>
+
+      <p>
+        <strong>10・15・20・30・45・60・90 秒</strong>のいずれか、または「間隔を指定…」で任意の秒数を入れます。
+      </p>
+      <ul class="feature-list">
+        <li>次に送るまでの残り秒がボタンの横に出ます</li>
+        <li><strong>読み上げ中は送りません</strong>（読み上げ側がページを進めるため）。この間は「—」と表示されます</li>
+        <li>本の終わりまで来ると自分から止まります</li>
+        <li>止めるときは同じメニューの「自動ページ送りを止める」</li>
+      </ul>
+      <p>
+        本を閉じても稼働状態は保たれるので、書棚に戻ってから解除することもできます。
+      </p>
+    </section>
+
+    <!-- 十 -->
+    <section id="sleep">
+      <h3>十　スリープタイマー</h3>
+
+      <figure class="fig--inset">
+        <a href="assets/img/menu-sleep.webp" title="原寸で開く"><img src="assets/img/menu-sleep.webp" width="460" height="312" loading="lazy"
+             alt="読み上げメニューのスリープタイマーサブメニュー"></a>
+        <figcaption><b>読み上げ &gt; スリープタイマー。</b>リーダー下部の月のボタンからも開けます。残り時間はボタンの横に数字で出ます。</figcaption>
+      </figure>
+
+      <p>
+        <strong>15・30・45・60・90・120 分</strong>、または「時間を指定…」。
+      </p>
+
+      <h4>満了時の動作</h4>
+      <dl class="deflist">
+        <dt>読み上げを停止</dt>
+        <dd>読み上げだけを止めます（既定）。</dd>
+        <dt>Mac をスリープ</dt>
+        <dd>読み上げを止めてから Mac をスリープさせます。</dd>
+        <dt>Mac をシャットダウン</dt>
+        <dd>
+          読み上げを止め、<strong>30 秒の猶予</strong>を画面いっぱいに出してからシャットダウンします。
+          起きていれば「取り消す」で中止できますし、「今すぐシャットダウン」で待たずに実行もできます。
+          猶予の告知は書棚に戻っていても見えます。
+        </dd>
+      </dl>
+
+      <div class="note note--warn">
+        スリープ／シャットダウンを初めて使うときは、macOS の「"System Events" を操作する許可」ダイアログが出ます。
+        許可しないと電源の操作は行われません（読み上げの停止は行われます）。
+      </div>
+
+      <p>タイマーは本を閉じて書棚に戻っても動き続け、書棚からでも解除できます。</p>
+    </section>
+
+    <!-- 十一 -->
+    <section id="export">
+      <h3>十一　音声と動画の書き出し</h3>
+
+      <figure class="fig--inset">
+        <a href="assets/img/menu-file.webp" title="原寸で開く"><img src="assets/img/menu-file.webp" width="460" height="320" loading="lazy"
+             alt="ファイルメニューと書き出しサブメニュー"></a>
+        <figcaption><b>ファイル &gt; 書き出し。</b>リーダー下部の波形ボタン・フィルムボタンと同じ経路です。</figcaption>
+      </figure>
+
+      <p>
+        どちらも対象は<strong>いま読んでいるセクション</strong>（章）です。
+      </p>
+
+      <dl class="deflist">
+        <dt>オーディオを書き出し…（WAV）</dt>
+        <dd>セクションの文を順に合成し、一つの音声ファイルにまとめます。通勤中に自分の原稿を聴く、といった使い方に。</dd>
+        <dt>動画を書き出し…（MP4）</dt>
+        <dd>読んでいる箇所だけが発光する縦書きの朗読動画を作ります。録画ソフトも編集ソフトも要りません。</dd>
+      </dl>
+
+      <ul class="feature-list">
+        <li>保存先は<strong>環境設定 &gt; 読み上げ &gt; 音声の保存先</strong>（既定はダウンロード）</li>
+        <li>合成の進み具合が画面に出ます。途中で中止できます</li>
+        <li>読み上げ中と書き出し中は、もう一方の書き出しがグレーになります（同じ合成経路を使うため）</li>
+        <li>書き出しにも読み上げ辞書と話者・話速の設定が反映されます</li>
+        <li>書き出している間もページ送りや設定変更はできます</li>
+      </ul>
+
+      <p>
+        朗読動画を作る部分だけを取り出した、ブラウザ単体で動くツールも
+        <a href="https://github.com/veltrea/tategaki-reader/tree/main/narration-video"><code>narration-video/</code></a> に入っています。
+      </p>
+    </section>
+
+    <!-- 十二 -->
+    <section id="profiles">
+      <h3>十二　書棚を切り替える</h3>
+
+      <p>
+        メニュー「ファイル &gt; 書棚を切り替える」で、蔵書のセットそのものを丸ごと入れ替えます。
+        「ファイル &gt; 書棚を管理…」から新しい書棚の追加・名前の変更・削除ができます。
+      </p>
+
+      <figure>
+        <a href="assets/img/shelf-profiles.webp" title="原寸で開く"><img src="assets/img/shelf-profiles.webp" width="1600" height="835" loading="lazy"
+             alt="書棚の管理シート。二つの書棚が並び、片方に「表示中」と出ている"></a>
+        <figcaption><b>書棚の管理。</b>「切り替える」で表示中の書棚が変わります。新しい書棚は空で始まり、同梱サンプルも入りません。このサイトの画面写真は、公開できる本だけを入れた書棚に切り替えて撮っています。</figcaption>
+      </figure>
+
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>書棚ごとに分かれるもの</th><th>共通のまま残るもの</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>蔵書の一覧、分類、お気に入り、読書位置、しおり、表紙、読み上げ辞書、全書籍共通 CSS</td>
+              <td>読み上げエンジンの接続先、話者・話速、表示の既定値といった機械の設定</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>なぜ「隠す」ではないのか</h4>
+      <p>
+        隠す作りだと、解除し忘れ・表紙のメモリキャッシュの残り・書棚の背景に敷いた表紙といった経路を
+        ひとつ見落とすだけで漏れます。読む先を切り替える作りなら、<strong>読んでいないものは表示できません</strong>。
+        画面共有やスクリーンショットのために、公開できる本だけを入れた書棚を用意しておくのが使い方です。
+      </p>
+
+      <ul class="feature-list">
+        <li>最初からある書棚と、いま表示中の書棚は消せません</li>
+        <li>書棚を消しても、<strong>EPUB ファイル自体は消えません</strong>。データも消さずに残すので、取り違えても戻せます</li>
+        <li>EPUB ファイルは書棚をまたいで共有されます。同じ本を二つの書棚に置いても、二重に持つことにはなりません</li>
+      </ul>
+    </section>
+
+    <!-- 十三 -->
+    <section id="settings">
+      <h3>十三　環境設定</h3>
+
+      <p><kbd>⌘,</kbd>（メニュー「EpubReaderSpike &gt; 環境設定…」）で開きます。タブは二つです。</p>
+
+      <h4>読み上げ</h4>
+      <ul class="feature-list">
+        <li>読み上げエンジン（VOICEVOX / AivisSpeech）と接続状態、エンジンの URL</li>
+        <li>話者、話速</li>
+        <li>無音の長さ（改行・句読点の間）</li>
+        <li>音声の保存先（既定はダウンロード）</li>
+      </ul>
+
+      <h4>表示</h4>
+      <figure>
+        <a href="assets/img/settings-display.webp" title="原寸で開く"><img src="assets/img/settings-display.webp" width="1600" height="835" loading="lazy"
+             alt="環境設定の表示タブ。文字サイズ、行間、テーマ、言語、書字方向などの一覧"></a>
+        <figcaption><b>環境設定 &gt; 表示。</b>ここでの値は<b>全書籍の既定</b>です。本を開いた状態でリーダー側から変えたものは、その本だけの指定として上書きされます。</figcaption>
+      </figure>
+
+      <ul class="feature-list">
+        <li>文字サイズ、行間、テーマ</li>
+        <li>言語（Auto / 日本語 / English）— <strong>反映はアプリの再起動後</strong>です</li>
+        <li>書字方向、表示モード、綴じ方向、画像ページの見開き、本文の見開き</li>
+        <li><strong>デバッグモード</strong> — 入れるとリーダーのツールバーに測定グリッドのボタンが出ます</li>
+      </ul>
+
+      <p>変更は「保存」で反映されます。「テスト再生」は保存前でも試せます。</p>
+    </section>
+
+    <!-- 十四 -->
+    <section id="shortcuts">
+      <h3>十四　ショートカット一覧</h3>
+
+      <div class="table-scroll">
+        <table>
+          <caption>メニューから使えるもの</caption>
+          <tbody>
+            <tr><th><kbd>⌘O</kbd></th><td>開く…（本を選ぶ）</td></tr>
+            <tr><th><kbd>⇧⌘O</kbd></th><td>フォルダから追加…</td></tr>
+            <tr><th><kbd>⌘,</kbd></th><td>環境設定…</td></tr>
+            <tr><th><kbd>⌘F</kbd></th><td>本文を検索（本を開いている間）</td></tr>
+            <tr><th><kbd>⌘]</kbd></th><td>次のページ</td></tr>
+            <tr><th><kbd>⌘[</kbd></th><td>前のページ</td></tr>
+            <tr><th><kbd>⌘=</kbd></th><td>文字を大きく</td></tr>
+            <tr><th><kbd>⇧⌘-</kbd></th><td>文字を小さく</td></tr>
+            <tr><th><kbd>⌘0</kbd></th><td>文字サイズを標準に戻す</td></tr>
+            <tr><th><kbd>⌘W</kbd></th><td>閉じる</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-scroll">
+        <table>
+          <caption>本文にフォーカスがあるとき</caption>
+          <tbody>
+            <tr><th>矢印キー</th><td>ページを送る／戻す</td></tr>
+            <tr><th>マウスホイール</th><td>ページを送る／戻す</td></tr>
+            <tr><th><kbd>Space</kbd></th><td>読み上げの再生／一時停止</td></tr>
+            <tr><th><kbd>Enter</kbd> / <kbd>Esc</kbd></th><td>読み上げを停止</td></tr>
+            <tr><th>ダブルクリック</th><td>その位置から読み上げ</td></tr>
+            <tr><th>右クリック</th><td>しおりを追加／選択語を読み上げ辞書に登録</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        文字サイズが <kbd>⌘+</kbd> / <kbd>⌘-</kbd> でないのは、Mac Catalyst ではこの二つを OS 側が押さえていて、
+        同じキーを割り当てた項目がメニューから消えてしまうためです。
+      </div>
+    </section>
+
+    <!-- 十五 -->
+    <section id="trouble">
+      <h3>十五　うまくいかないとき</h3>
+
+      <dl class="deflist">
+        <dt>アプリが「開発元を確認できない」と言われて起動しない</dt>
+        <dd>ad-hoc 署名のためです。<strong>右クリック →「開く」</strong>で一度だけ許可してください（<a href="#install">一章</a>）。</dd>
+
+        <dt>読み上げが始まらない／エンジン状態が「未接続」</dt>
+        <dd>
+          VOICEVOX（または AivisSpeech）が起動しているか確かめてください。
+          ポートを変えている場合は、環境設定の読み上げタブで URL を書き換えます（VOICEVOX の既定は <code>:50021</code>、AivisSpeech は <code>:10101</code>）。
+        </dd>
+
+        <dt>横書きで表示されてしまう</dt>
+        <dd>
+          EPUB 側に縦書き指定が無い本です。その本を開いた状態で「表示 &gt; 書字方向 &gt; 縦書き」を選ぶと、
+          その本の指定として覚えます。
+        </dd>
+
+        <dt>表紙が潰れている／見開きの組み合わせがずれる</dt>
+        <dd>
+          表示モードが「EPUB のまま」になっていないか確かめてください。「読みやすさ優先」なら比率を是正します。
+          組み合わせのずれは、画像ページ表示中に出る「見開きをずらす」ボタンで直せます。
+        </dd>
+
+        <dt>目次が出ない</dt>
+        <dd>
+          その EPUB にナビゲーション文書が入っていません（青空文庫由来の本によくあります）。
+          読み進む位置は<a href="#read">しおり</a>と検索で補ってください。
+        </dd>
+
+        <dt>読みを直したのに、別の語まで変わってしまった</dt>
+        <dd>
+          短い語が熟語を食っています。壊されたくない長い語を、より<strong>上のレイヤー</strong>へ移してください（<a href="#dictionary">八章</a>）。
+        </dd>
+
+        <dt>書き出しのメニューがグレーになっている</dt>
+        <dd>
+          本を開いていないか、読み上げ中か、もう一方の書き出しが走っています。停止してから実行してください。
+        </dd>
+
+        <dt>スリープタイマーで Mac が眠らない／落ちない</dt>
+        <dd>
+          初回に出る「"System Events" を操作する許可」を許可していない可能性があります。
+          システム設定 → プライバシーとセキュリティ → オートメーション を確かめてください。
+        </dd>
+
+        <dt>書棚に本が出てこない／「ファイルが見つかりません」</dt>
+        <dd>
+          EPUB ファイルは元の場所を読みにいきます。ファイルを移動・改名した場合は、もう一度追加し直してください。
+          外付けディスクに置いている本は、そのディスクを繋いでから開きます。
+        </dd>
+      </dl>
+
+      <p>
+        解決しないときは <a href="https://github.com/veltrea/tategaki-reader/issues">Issues</a> へどうぞ。
+        本のどこがどう見えたか（できれば「EPUB のまま」で見た様子も）を書いていただけると助かります。
+      </p>
+    </section>
+
+  </div>
+</div>
+
+<footer class="colophon">
+  <div class="wrap">
+    <div class="colophon__grid">
+      <div>
+        <h3>入手</h3>
+        <ul>
+          <li><a href="https://github.com/veltrea/tategaki-reader/releases">Releases（ビルド済み）</a></li>
+          <li><a href="https://github.com/veltrea/tategaki-reader">ソースコード（GitHub）</a></li>
+          <li><a href="./">トップページ</a></li>
+        </ul>
+      </div>
+      <div>
+        <h3>読み上げエンジン</h3>
+        <ul>
+          <li><a href="https://voicevox.hiroshiba.jp/">VOICEVOX</a></li>
+          <li><a href="https://aivis-project.com/">AivisSpeech</a></li>
+        </ul>
+      </div>
+      <div>
+        <h3>ライセンス</h3>
+        <ul>
+          <li><a href="https://github.com/veltrea/tategaki-reader/blob/main/LICENSE">MIT License</a></li>
+          <li><a href="https://github.com/veltrea/tategaki-reader/blob/main/THIRD-PARTY-NOTICES.md">同梱している第三者のコード</a></li>
+        </ul>
+      </div>
+      <div>
+        <h3>連絡</h3>
+        <ul>
+          <li><a href="https://github.com/veltrea/tategaki-reader/issues">Issues でお気軽に</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="colophon__seal">
+      <span>縦書き EPUB リーダー — tategaki-reader</span>
+      <span>画面写真は青空文庫の作品と同梱の見本で撮影しています</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

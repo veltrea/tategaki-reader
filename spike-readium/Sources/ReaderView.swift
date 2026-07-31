@@ -59,7 +59,7 @@ struct ReaderScreen: View {
                         isImagePage: reader.currentPageIsImage,
                         onRegisterDictionary: { reader.requestDictionaryRegister(surface: $0) },
                         onDoubleTap: { reader.startSpeakingFromSelection() },
-                        onDropEPUB: { model.open(url: $0) },
+                        onDropBooks: { urls, single in model.add(urls: urls, openIfSingle: single) },
                         onPageSide: { side in Task { await reader.pageStep(side: side) } },
                         onHover: { point, height in
                             reader.updateContentPointer(y: point?.y, viewHeight: height)
@@ -93,10 +93,9 @@ struct ReaderScreen: View {
             reader.bind(model: model, bookID: book.id)
             // メニューバーの「表示」の操作先。書棚へ戻ると onDisappear で外す。
             model.activeReader = reader
-            #if DEBUG
-            // DEBUG 限定: 計りレイヤー/測定を TestBus から駆動できるよう現在のリーダーを登録。
+            // 読み辞書の編集・検算（配布版でも開いている）と、計りレイヤー/測定（開発ビルド）を
+            // バスから駆動できるよう、いま開いているリーダーを登録する。
             TestBus.shared.reader = reader
-            #endif
             await reader.load(book: book)
         }
         .onChange(of: reader.progression) { newValue in
@@ -465,6 +464,12 @@ struct ReaderScreen: View {
             .disabled(!reader.engineReady || reader.isSavingVideo
                       || reader.isSavingAudio || reader.canStop)
             .help("このセクションを動画保存（MP4）")
+
+            // 自動ページ送り（何秒ごとに1ページ進めるか）。読み上げなしで流し読みするときの手。
+            AutoPagerButton(model: model, pager: model.autoPager)
+
+            // スリープタイマー（何分後に読み上げを止めるか／止めた後にスリープ・シャットダウン）。
+            SleepTimerButton(model: model, timer: model.sleepTimer)
         }
         // 各ボタンの外形を固定する。ProgressView 差し替えや disabled で
         // ボタン自身の幅が変わらないよう ZStack 側は Image サイズに従う。
@@ -488,8 +493,9 @@ final class DictionaryHostViewController: UIViewController {
     /// 本文の現在選択テキストを返す（ReaderModel.selectedText を読む）。
     /// buildMenu は同期呼び出しなので、JS 往復でなく selectionchange 同期値を使う。
     var selectionText: (() -> String)?
-    /// ウィンドウへ EPUB がドロップされたときのコールバック（リーダー表示中の D&D 用）。
-    var onDropEPUB: ((URL) -> Void)?
+    /// ウィンドウへ本／フォルダがドロップされたときのコールバック（リーダー表示中の D&D 用）。
+    /// 第2引数は「単独のドロップか」＝1冊だけならそのまま開いてよい、の合図。
+    var onDropBooks: (([URL], Bool) -> Void)?
     /// 1画面ページ送りの要求。渡すのは「押された向き」だけで、進む/戻るへの解決は
     /// ReaderModel が本単位の書字方向で行う。ビュー側に向きを持たせない設計にしてあるのは、
     /// SwiftUI 経由で流し込む値は反映が1フレーム遅れることがあり、その隙に押されると
@@ -601,6 +607,20 @@ final class DictionaryHostViewController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         applyInsets(animated: false)  // 幅変化に追従（列フィット）
+        stripWebDropInteractions(webView)
+    }
+
+    /// WKWebView が自前で持つ drop interaction を剥がす。
+    ///
+    /// 本文ビューはウィンドウ全面を覆っており、WebKit 側の interaction がドロップを掴んで
+    /// ホストビュー（こちら）へ渡さない＝**本を読んでいる間はドロップが死ぬ**。落とされた本を
+    /// 受け取れるよう、WK 側だけを剥がす（このビュー自身の interaction は残す）。
+    /// WebKit はビュー階層を組み直すたびに付け直すので、レイアウトのたびに剥がし続ける。
+    private func stripWebDropInteractions(_ view: UIView) {
+        for interaction in view.interactions where interaction is UIDropInteraction {
+            view.removeInteraction(interaction)
+        }
+        view.subviews.forEach(stripWebDropInteractions)
     }
 
     /// Kindle 風の左右端タップゾーン（幅15%）。ホバーで矢印、クリックでページ送り。
@@ -724,7 +744,9 @@ final class DictionaryHostViewController: UIViewController {
 // MARK: - リーダー表示中の EPUB ドロップ受付
 
 extension DictionaryHostViewController: UIDropInteractionDelegate {
-    private static let dropTypes = [UTType.epub.identifier, UTType.fileURL.identifier]
+    // フォルダも受ける（中身の本をまとめて書棚へ入れる。解決は BookDrop 側）。
+    private static let dropTypes =
+        ImportableBook.contentTypes.map(\.identifier) + [UTType.fileURL.identifier, UTType.folder.identifier]
 
     func dropInteraction(_ interaction: UIDropInteraction, canHandle session: UIDropSession) -> Bool {
         session.hasItemsConforming(toTypeIdentifiers: Self.dropTypes)
@@ -736,10 +758,12 @@ extension DictionaryHostViewController: UIDropInteractionDelegate {
 
     func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
         dlog("[Drop] performDrop items=\(session.items.count)")
+        let single = session.items.count == 1
         for item in session.items {
-            // 書棚と同じ堅牢ローダ（in-place 実パス優先）。deliver は main で呼ばれる。
-            EPUBDrop.load(from: item.itemProvider) { [weak self] url in
-                self?.onDropEPUB?(url)
+            // 書棚と同じ堅牢ローダ（in-place 実パス優先／フォルダは中身を再帰収集）。
+            // deliver は main で呼ばれる。
+            BookDrop.load(from: item.itemProvider) { [weak self] urls in
+                self?.onDropBooks?(urls, single)
             }
         }
     }
@@ -954,8 +978,8 @@ private struct NavigatorContainer: UIViewControllerRepresentable {
     var isImagePage: Bool = false
     let onRegisterDictionary: (String) -> Void
     let onDoubleTap: () -> Void
-    /// リーダー表示中に EPUB がドロップされたとき（ウィンドウ D&D 継続用）。
-    var onDropEPUB: (URL) -> Void = { _ in }
+    /// リーダー表示中に本／フォルダがドロップされたとき（ウィンドウ D&D 継続用）。
+    var onDropBooks: ([URL], Bool) -> Void = { _, _ in }
     /// 1画面ページ送りの要求（押された向き）。タップゾーン・矢印から呼ぶ。
     var onPageSide: (PageSide) -> Void = { _ in }
     /// ポインタのホバー位置（本文ビュー座標）とビュー高さ。操作パネルの自動表示に使う。
@@ -979,7 +1003,7 @@ private struct NavigatorContainer: UIViewControllerRepresentable {
             webView: reader.engine.makeWebView(pageBackground: pageBackground))
         host.onRegister = onRegisterDictionary
         host.selectionText = { [weak reader] in reader?.selectedText ?? "" }
-        host.onDropEPUB = onDropEPUB
+        host.onDropBooks = onDropBooks
         host.onPageSide = onPageSide
         host.onShortcut = onShortcut
         host.onFind = onFind
@@ -1562,8 +1586,12 @@ final class ReaderModel: NSObject, ObservableObject {
 
     /// 1画面ぶんのページ送り。foliate の正規ページネーション（next/prev）に委譲する。
     /// 縦書き・横書き・RTL・固定レイアウトすべて foliate が正しく処理する。
-    func pageStep(forward: Bool) async {
+    ///
+    /// - Parameter automatic: 自動ページ送りからの呼び出しか。手動（タップ・キー・メニュー）の
+    ///   ときだけ自動送りの間隔を数え直す。自分でめくった直後にすぐ自動で送られると2ページ飛ぶため。
+    func pageStep(forward: Bool, automatic: Bool = false) async {
         guard engineReady else { return }
+        if !automatic { model?.autoPager.noteManualTurn() }
         await engine.call(forward ? "window.__reader.next()" : "window.__reader.prev()")
     }
 
@@ -1586,6 +1614,8 @@ final class ReaderModel: NSObject, ObservableObject {
 
     /// スライダー等からのシーク。本全体の割合(0...1)へジャンプ。
     func seek(to fraction: Double) async {
+        // 自分で位置を動かしたのだから、自動送りの間隔も頭から数え直す。
+        model?.autoPager.noteManualTurn()
         let f = min(max(fraction, 0), 1)
         progression = f
         guard engineReady else { return }
@@ -2058,6 +2088,22 @@ final class ReaderModel: NSObject, ObservableObject {
     func prepareSpeech(_ text: String) -> PreparedSpeech {
         dictionary.prepare(text)
     }
+}
+
+// MARK: - 自動ページ送りの相手
+
+/// 自動ページ送り（`AutoPager`）から見たリーダー。
+/// タイマー側が要るのは「読み上げ中か」「本のどこにいるか」「1ページ送る」だけなので、
+/// ReaderModel の広い面は見せない。
+extension ReaderModel: AutoPagerTarget {
+    var isSpeakingNow: Bool { isPlaying }
+    var pageProgression: Double { progression }
+
+    func advancePageAutomatically() async {
+        await pageStep(forward: true, automatic: true)
+    }
+
+    func noteAutoPagerStatus(_ text: String) { status = text }
 }
 
 // MARK: - 計りレイヤー（測定オーバーレイ・DEBUG限定）

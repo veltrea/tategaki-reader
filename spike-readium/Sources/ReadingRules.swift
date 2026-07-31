@@ -247,10 +247,13 @@ struct ReadingDictionary {
 // MARK: - 永続化
 
 /// 読み辞書の永続化（全書籍共通・UserDefaults）。
+///
+/// **書棚ごとに分ける**（`ProfileDefaults`）。登録語はそのまま作品の固有名詞になるので、
+/// 別の書棚を見せているときに辞書を開いても手元の蔵書の語が出てこないようにする。
 enum ReadingDictionaryStore {
-    static let key = "tts.readingDictionary.v2"
+    static var key: String { ProfileDefaults.key(.readingDictionary) }
     /// 旧「読み替えルール」（正規表現のみ・配列順で適用）のキー。
-    private static let legacyKey = "tts.readingRules.v1"
+    private static var legacyKey: String { ProfileDefaults.key(.legacyReadingRules) }
 
     static func load() -> [ReadingEntry] {
         if let data = UserDefaults.standard.data(forKey: key),

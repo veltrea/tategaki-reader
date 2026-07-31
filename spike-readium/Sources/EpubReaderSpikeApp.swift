@@ -29,6 +29,11 @@ struct EpubReaderSpikeApp: App {
             // SwiftUI 側で同じキーの項目を足すと黙って捨てられる（⌘F と同じ）。
             // AppDelegate の buildMenu で既定側を差し替えている。
             CommandGroup(replacing: .newItem) { }
+            // 「ファイル > 書棚を切り替える／書棚を管理…」。
+            // 書棚の切り替えは「どの蔵書を読むか」の選択なので、開く・書き出しと同じファイル側に置く。
+            CommandGroup(after: .newItem) {
+                ShelfProfileCommands(model: model)
+            }
             // 「ファイル > 書き出し」。開く…（上）と保存系の間に置く。
             CommandGroup(after: .saveItem) {
                 ExportCommands(model: model)
@@ -77,6 +82,13 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     static var menuDump: [String] = []
     #endif
 
+    /// 溜めてある書棚の変更を書き切ってから終わる。
+    /// 蔵書の保存はまとめて（0.7 秒ぶん）行うので、書く前に落ちる窓がここだけ開く。
+    @MainActor
+    func applicationWillTerminate(_ application: UIApplication) {
+        Self.model?.flushPendingSaves()
+    }
+
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)
         guard builder.system == .main else { return }
@@ -106,7 +118,15 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             action: #selector(openBookPanel(_:)),
             input: "o",
             modifierFlags: .command)
-        builder.replace(menu: .open, with: UIMenu(title: "", options: .displayInline, children: [open]))
+        // フォルダはファイルと同じパネルでは選べない（BookOpenPanel の説明を参照）ので、
+        // 「まとめて登録」は独立した項目にする。
+        let openFolder = UIKeyCommand(
+            title: String(localized: "フォルダから追加…"),
+            action: #selector(addBooksFromFolderPanel(_:)),
+            input: "o",
+            modifierFlags: [.command, .shift])
+        builder.replace(menu: .open,
+                        with: UIMenu(title: "", options: .displayInline, children: [open, openFolder]))
 
         #if DEBUG
         // 消し残しの識別子を実物から拾う（推測だと外れる。実際 autofill/writing-tools は外れた）。
@@ -145,6 +165,11 @@ extension UIResponder {
     @objc func openBookPanel(_ sender: Any?) {
         AppDelegate.model?.requestOpenPanel = true
     }
+
+    /// 「フォルダから追加…」。選んだフォルダの中の本をまとめて書棚へ入れる。
+    @objc func addBooksFromFolderPanel(_ sender: Any?) {
+        AppDelegate.model?.requestFolderPanel = true
+    }
 }
 
 /// 「検索…」の実行先はここではなくリーダーのホストビュー（DictionaryHostViewController）。
@@ -158,6 +183,11 @@ extension UIResponder {
 /// 書棚 ⇄ リーダーの切り替え。EPUB のドロップ受付とファイル選択もここで扱う。
 struct RootView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.scenePhase) private var scenePhase
+    /// スリープタイマーの「時間を指定…」の入力欄（分）。
+    @State private var customMinutes = ""
+    /// 自動ページ送りの「間隔を指定…」の入力欄（秒）。
+    @State private var customInterval = ""
 
     var body: some View {
         Group {
@@ -168,86 +198,151 @@ struct RootView: View {
                 ShelfView(model: model)
             }
         }
-        // ウィンドウへのドラッグ＆ドロップで EPUB を開く。
+        // フォルダをまとめて登録しているあいだの帯。書棚・リーダーのどちらにいても見えるよう重ねる。
+        .overlay(alignment: .top) { BookImportBanner(model: model) }
+        // シャットダウン前の猶予。書棚に戻っていても必ず見えるよう、画面全体に重ねる。
+        .overlay { SleepTimerShutdownBanner(timer: model.sleepTimer) }
+        .animation(.easeInOut(duration: 0.2), value: model.sleepTimer.shutdownCountdown == nil)
+        // 書棚の管理。書棚・リーダーのどちらからでもメニューで開けるよう、ここで提示する。
+        .sheet(isPresented: $model.showProfileManager) {
+            ShelfProfileSheet(model: model)
+        }
+        .alert("スリープタイマー", isPresented: $model.showSleepTimerCustom) {
+            TextField("分", text: $customMinutes)
+            Button("開始") {
+                if let m = Int(customMinutes.trimmingCharacters(in: .whitespaces)), m > 0 {
+                    model.sleepTimer.start(minutes: m)
+                }
+            }
+            Button("キャンセル", role: .cancel) { }
+        } message: {
+            Text("何分後に読み上げを停止するかを分で入力してください。")
+        }
+        .alert("自動ページ送り", isPresented: $model.showAutoPagerCustom) {
+            TextField("秒", text: $customInterval)
+            Button("開始") {
+                if let s = Int(customInterval.trimmingCharacters(in: .whitespaces)), s > 0 {
+                    model.autoPager.start(seconds: s)
+                }
+            }
+            Button("キャンセル", role: .cancel) { }
+        } message: {
+            Text("何秒ごとに次のページへ進むかを秒で入力してください。")
+        }
+        .onChange(of: model.showAutoPagerCustom) { showing in
+            if showing { customInterval = String(model.autoPager.seconds) }
+        }
+        // 画面から退いたら、溜めてある書棚の変更（読書位置など）を書き切る。
+        .onChange(of: scenePhase) { phase in
+            if phase != .active { model.flushPendingSaves() }
+        }
+        .onChange(of: model.showSleepTimerCustom) { showing in
+            // 開くたびに前回値を入れておく（続けて同じ長さを使うことが多い）。
+            if showing { customMinutes = String(model.sleepTimer.lastMinutes) }
+        }
+        // ウィンドウへのドラッグ＆ドロップで EPUB を開く。フォルダを落とすと、
+        // その中の登録できるファイルを再帰的に集めてまとめて書棚へ入れる。
         // ※ `.dropDestination(for: URL.self)` は Catalyst で Finder のファイル(public.file-url)を
         //   受け取れないことがある（public.url=Web URL 前提になりがち）。NSItemProvider から
         //   file-url を明示的に読む堅牢版にする（URL 表現／Data 表現の両対応）。
-        .onDrop(of: [.epub, .fileURL], isTargeted: nil) { providers in
+        .onDrop(of: ImportableBook.contentTypes + [.fileURL, .folder], isTargeted: nil) { providers in
             handleDropped(providers)
         }
         // Finder で .epub をダブルクリック／アプリのアイコンにドロップしたときの入口。
         // Catalyst では起動時・起動中とも UIScene の openURLContexts 経由で届き、SwiftUI がここへ流す。
+        // アイコンにはフォルダも落とせるので、ウィンドウへのドロップと同じ扱い（中身をまとめて登録）にする。
         .onOpenURL { url in
             dlog("[Open] onOpenURL \(url.absoluteString)")
             guard url.isFileURL else { return }
-            model.open(url: url)
+            model.add(urls: [url])
         }
         .task {
             model.seedSampleIfNeeded()
             // メニュー「開く…」（UIKit 側で組む）の対象。
             AppDelegate.model = model
         }
-        #if DEBUG
         .task {
-            // DEBUG 限定: UI テスト用コマンドバスを起動しモデルを注入。
+            // 外部からの操作口（読み辞書の自動化・UI テスト）を開いてモデルを注入。
+            // 配布版で受け付けるのは辞書まわりだけ（TestBus.releaseCommands）。
             TestBus.shared.model = model
             TestBus.shared.start()
         }
-        #endif
         // メニュー「開く…」と書棚の「本を追加」からのファイル選択。
+        // ドロップと同じく、フォルダを選べば中の本をまとめて登録する。
         .onChange(of: model.requestOpenPanel) { requested in
             guard requested else { return }
             model.requestOpenPanel = false
-            EPUBOpenPanel.present { model.open(url: $0) }
+            BookOpenPanel.present { model.add(urls: $0) }
+        }
+        // 「フォルダから追加…」。フォルダだけを選ぶパネル（下の requestFolderPanel の説明を参照）。
+        .onChange(of: model.requestFolderPanel) { requested in
+            guard requested else { return }
+            model.requestFolderPanel = false
+            BookOpenPanel.present(foldersOnly: true) { model.add(urls: $0, openIfSingle: false) }
         }
     }
 
-    /// ドロップされた NSItemProvider 群から EPUB を取り出して開く（書棚・リーダー共通の EPUBDrop 経由）。
+    /// ドロップされた NSItemProvider 群から本を取り出して書棚へ入れる（書棚・リーダー共通の BookDrop 経由）。
+    ///
+    /// provider ごとに非同期で解決されるので、複数まとめて落とされたときは
+    /// 届いた順に取り込みの列へ並ぶ（`AppModel` が直列に処理する）。
     private func handleDropped(_ providers: [NSItemProvider]) -> Bool {
+        // 複数落とされたときは1冊でも開かない（どれを開くべきか決められないため）。
+        let single = providers.count == 1
         var accepted = false
         for provider in providers {
-            if EPUBDrop.load(from: provider, deliver: { model.open(url: $0) }) { accepted = true }
+            if BookDrop.load(from: provider, deliver: { model.add(urls: $0, openIfSingle: single) }) {
+                accepted = true
+            }
         }
         return accepted
     }
 }
 
-// MARK: - EPUB を選ぶファイルパネル
+// MARK: - 本／フォルダを選ぶファイルパネル
 
-/// EPUB を選ぶファイルパネル。
+/// 本とフォルダを選ぶファイルパネル。
 ///
 /// SwiftUI の `.fileImporter` は Catalyst だと反応しないこと（メニューから叩いても
 /// パネルが出ない）があったので、UIKit のドキュメントピッカーを直接提示する。
 /// App Sandbox 無効なので、選んだ実パスをコピーせずそのまま読める（asCopy: false）。
+///
+/// フォルダと複数選択を許すのは、ドロップと同じことをパネルからもできるようにするため
+///（受け取った側は同じ `AppModel.add(urls:)` を通り、フォルダは中身へ展開される）。
 @MainActor
-final class EPUBOpenPanel: NSObject, UIDocumentPickerDelegate {
+final class BookOpenPanel: NSObject, UIDocumentPickerDelegate {
     /// 提示中のデリゲート。UIKit 側は delegate を weak で持つので、ここで生かしておく。
-    private static var current: EPUBOpenPanel?
+    private static var current: BookOpenPanel?
 
-    private let completion: (URL) -> Void
+    private let completion: ([URL]) -> Void
 
-    private init(completion: @escaping (URL) -> Void) {
+    private init(completion: @escaping ([URL]) -> Void) {
         self.completion = completion
     }
 
-    static func present(completion: @escaping (URL) -> Void) {
+    static func present(foldersOnly: Bool = false, completion: @escaping ([URL]) -> Void) {
         guard let host = topViewController() else {
             dlog("[Open] no view controller to present the panel")
             return
         }
-        let panel = EPUBOpenPanel(completion: completion)
+        let panel = BookOpenPanel(completion: completion)
         current = panel
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.epub], asCopy: false)
-        picker.allowsMultipleSelection = false
+        // 本とフォルダを1枚のパネルで混ぜられない。Catalyst のパネルはフォルダを
+        // 「潜る先」として扱い、`.folder` を許可の一覧に足してもフォルダを選んだ状態では
+        // 『開く』が押せないまま（実測）。フォルダ**だけ**の一覧にすると初めて選べるので、
+        // 入口を分けてある。
+        let types: [UTType] = foldersOnly ? [.folder] : ImportableBook.contentTypes
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: false)
+        picker.allowsMultipleSelection = true
         picker.delegate = panel
         host.present(picker, animated: true)
     }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         defer { Self.current = nil }
-        guard let url = urls.first else { return }
-        dlog("[Open] picked \(url.path)")
-        completion(url)
+        guard !urls.isEmpty else { return }
+        dlog("[Open] picked \(urls.count) item(s)")
+        completion(urls)
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
@@ -265,54 +360,4 @@ final class EPUBOpenPanel: NSObject, UIDocumentPickerDelegate {
     }
 }
 
-// MARK: - EPUB ドロップの堅牢ローダ（書棚・リーダー共通）
-
-/// ドロップされた `NSItemProvider` から EPUB のファイル URL を取り出す。
-/// Catalyst の Finder ドラッグは `public.file-url` を持たず `org.idpf.epub-container`（+ finder.node）で
-/// 渡るため、`loadItem(public.file-url)` は失敗する。**in-place ファイル表現（オリジナルの実パス）**を
-/// 優先し、取れない場合のみテンポラリコピーを安定領域へ退避してから開く。
-enum EPUBDrop {
-    /// - Returns: この provider を受理して読み込みを開始したか。
-    @discardableResult
-    static func load(from provider: NSItemProvider, deliver: @escaping (URL) -> Void) -> Bool {
-        let ids = provider.registeredTypeIdentifiers
-        let typeID = ids.first(where: { UTType($0)?.conforms(to: .epub) == true })
-            ?? ids.first(where: { UTType($0)?.conforms(to: .data) == true || UTType($0)?.conforms(to: .fileURL) == true })
-        guard let typeID else {
-            dlog("[Drop] no usable type in \(ids)")
-            return false
-        }
-        dlog("[Drop] types=\(ids) -> using \(typeID)")
-        // 1) in-place（オリジナルの実パス。sandbox 無効なので以後も読める）。
-        provider.loadInPlaceFileRepresentation(forTypeIdentifier: typeID) { url, isInPlace, err in
-            if let url, url.pathExtension.lowercased() == "epub" {
-                dlog("[Drop] in-place \(url.path) isInPlace=\(isInPlace)")
-                DispatchQueue.main.async { deliver(url) }
-                return
-            }
-            dlog("[Drop] in-place failed (err=\(String(describing: err))); trying copy")
-            // 2) コピー（テンポラリはクロージャ後に消えるので安定領域へ複製してから開く）。
-            provider.loadFileRepresentation(forTypeIdentifier: typeID) { tmp, err2 in
-                guard let tmp, let stable = copyToImports(tmp) else {
-                    dlog("[Drop] copy path failed err=\(String(describing: err2))")
-                    return
-                }
-                dlog("[Drop] copied to \(stable.path)")
-                DispatchQueue.main.async { deliver(stable) }
-            }
-        }
-        return true
-    }
-
-    /// テンポラリの EPUB を Application Support/DroppedImports に複製して安定パスを返す。
-    private static func copyToImports(_ src: URL) -> URL? {
-        let fm = FileManager.default
-        guard let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
-        let dir = appSupport.appendingPathComponent("DroppedImports", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        let dest = dir.appendingPathComponent(src.lastPathComponent)
-        try? fm.removeItem(at: dest)
-        do { try fm.copyItem(at: src, to: dest); return dest }
-        catch { dlog("[Drop] copy failed: \(error)"); return nil }
-    }
-}
+// ドロップの受け取り（フォルダ展開を含む）は BookImport.swift の `BookDrop` に移した。
