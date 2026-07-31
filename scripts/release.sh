@@ -84,15 +84,21 @@ APP="$EXPORT/spike-readium/DerivedData/Build/Products/Release-maccatalyst/$APP_N
 # リリースでは TestBus.releaseCommands 以外を突き返す。その分岐（#if !DEBUG）が
 # 実物に入っているかを、拒否メッセージの文字列で確認する。
 BIN="$APP/Contents/MacOS/$APP_NAME"
-if ! strings "$BIN" 2>/dev/null | grep -q "command not available in this build"; then
-    err "配布ビルドにコマンドの絞り込みが入っていません（TestBus の #if !DEBUG を確認）"
-    KEEP_TMP=1; exit 1
-fi
+# 文字列は一度変数へ受け、判定はパイプを使わない `case` で行う。
+# `… | grep -q` だと、grep が最初の一致で抜けた拍子に上流が SIGPIPE で死に、
+# pipefail がその終了コードを拾って「一致したのに失敗」になる（実際に踏んだ）。
+SYMS="$(strings "$BIN" 2>/dev/null || true)"
+case "$SYMS" in
+    *"command not available in this build"*) ;;
+    *)  err "配布ビルドにコマンドの絞り込みが入っていません（TestBus の #if !DEBUG を確認）"
+        KEEP_TMP=1; exit 1 ;;
+esac
 # 開発ビルド限定の逃げ道（電源操作を記録だけにするフラグ）が混ざっていないこと。
-if strings "$BIN" 2>/dev/null | grep -q "sleepTimer.debug.realPower"; then
-    err "配布ビルドに DEBUG 限定のコードが混ざっています"
-    KEEP_TMP=1; exit 1
-fi
+case "$SYMS" in
+    *"sleepTimer.debug.realPower"*)
+        err "配布ビルドに DEBUG 限定のコードが混ざっています"
+        KEEP_TMP=1; exit 1 ;;
+esac
 ok "コマンドバスは読み辞書まわりのみ（絞り込みを確認）"
 
 # --- 3. ad-hoc で deep sign -----------------------------------------------
@@ -128,20 +134,18 @@ hdiutil create -volname "$APP_NAME $VERSION" -srcfolder "$STAGE" \
 # 配る前に、**マウントした実物**で署名を確かめる（作業ツリーの .app ではなく、
 # 受け取った人が触るのと同じ経路で見る）。
 say "DMG を検証"
-MNT="$(mktemp -d "$DIST/mnt.XXXXXX")"
-hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MNT" -quiet
+# マウント先は hdiutil に決めさせる（-mountpoint で任意のディレクトリを指定すると
+# EACCES で attach failed になる環境がある。実際にこのリポジトリのある外付けで踏んだ）。
+MNT="$(hdiutil attach "$DMG" -nobrowse -readonly -plist \
+        | /usr/bin/python3 -c 'import plistlib,sys; d=plistlib.loads(sys.stdin.buffer.read()); print([e["mount-point"] for e in d["system-entities"] if e.get("mount-point")][0])')"
+[ -n "$MNT" ] || { err "DMG をマウントできません"; KEEP_TMP=1; exit 1; }
+fail=""
 stray="$(find "$MNT" -name '._*' | wc -l | tr -d ' ')"
-if [ "$stray" != "0" ]; then
-    err "AppleDouble が $stray 件混ざっています"
-    hdiutil detach "$MNT" -quiet; rmdir "$MNT"; KEEP_TMP=1; exit 1
-fi
-if ! codesign --verify "$MNT/$APP_NAME.app"; then
-    err "マウントした .app の署名検証に失敗しました"
-    hdiutil detach "$MNT" -quiet; rmdir "$MNT"; KEEP_TMP=1; exit 1
-fi
-codesign -dv "$MNT/$APP_NAME.app" 2>&1 | grep -E 'Identifier|Sealed' | sed 's/^/      /' >&2
-hdiutil detach "$MNT" -quiet
-rmdir "$MNT"
+[ "$stray" != "0" ] && fail="AppleDouble が $stray 件混ざっています"
+codesign --verify "$MNT/$APP_NAME.app" || fail="マウントした .app の署名検証に失敗しました"
+codesign -dv "$MNT/$APP_NAME.app" 2>&1 | grep -E 'Identifier|Sealed' | sed 's/^/      /' >&2 || true
+hdiutil detach "$MNT" -quiet || true
+if [ -n "$fail" ]; then err "$fail"; KEEP_TMP=1; exit 1; fi
 ok "署名の検証を通過（マウントした実物）"
 ok "$(basename "$DMG") — $(du -h "$DMG" | awk '{print $1}') / sha256 $(shasum -a 256 "$DMG" | cut -c1-16)…"
 
@@ -164,11 +168,25 @@ macOS（Mac Catalyst）向けのビルド済みアプリです。Apple Developer
    - コマンドでよければ: \`xattr -dr com.apple.quarantine /Applications/$APP_NAME.app\`
 3. 読み上げを使うなら [VOICEVOX](https://voicevox.hiroshiba.jp/) か AivisSpeech を起動しておく
 
+### このバージョンで増えたもの
+- **自動ページ送り** — 10〜90 秒か任意の間隔。読み上げ中は送らず、本の終わりで止まる
+- **スリープタイマー** — 15〜120 分。満了時に読み上げ停止／Mac をスリープ／シャットダウン
+  （シャットダウンは 30 秒の猶予つきで取り消せる）
+- **分類**（入れ子可）・お気に入り・作者別の五十音表示
+- **書棚の切り替え** — 蔵書の一覧・分類・読書位置・しおり・読み辞書ごと入れ替わる。
+  見せたくない本を「隠す」のではなく、読む先を変える作り
+- **フォルダから一括登録**（⇧⌘O、サブフォルダも探す）
+- 読み上げ辞書を外部から編集・検算できるように（AI に任せる用。詳しくはマニュアル八章）
+- 配布形式を ZIP から **DMG** へ
+
 ### 中身
 - バージョン $VERSION / ソースは同タグのコミット
 - 縦書き EPUB の表示（読みやすさ優先 / EPUB のまま の2モード）
 - 漫画（OMF）の綴じ方向・見開き・アスペクト比を本ごとに指定
 - VOICEVOX / AivisSpeech での読み上げ、音声・動画の書き出し
+
+### 使い方の説明
+https://veltrea.github.io/tategaki-reader/
 
 notarize（Apple の公証）は付いていません。必要な方はフォークして各自の Developer ID で
 署名してください。
