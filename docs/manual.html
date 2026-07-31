@@ -257,7 +257,7 @@
       <p>メニューバーの<strong>「表示」</strong>に、環境設定の「表示」タブと同じ項目が並んでいます。シートを開かずに切り替えられます。</p>
 
       <figure class="fig--inset">
-        <a href="assets/img/menu-view.webp" title="原寸で開く"><img src="assets/img/menu-view.webp" width="560" height="460" loading="lazy"
+        <a href="assets/img/menu-view.webp" title="原寸で開く"><img src="assets/img/menu-view.webp" width="540" height="463" loading="lazy"
              alt="表示メニューを開いたところ"></a>
         <figcaption><b>表示メニュー。</b>文字サイズ・行間・テーマ・表示モード・書字方向・綴じ方向・見開き・画像の比率が、すべてここに出ます。</figcaption>
       </figure>
@@ -505,7 +505,7 @@ python3 scripts/bus.py '{"cmd":"applyRules","text":"明は明日、明暗を明�
       <h3>九　自動ページ送り</h3>
 
       <figure class="fig--inset">
-        <a href="assets/img/menu-autopager.webp" title="原寸で開く"><img src="assets/img/menu-autopager.webp" width="390" height="320" loading="lazy"
+        <a href="assets/img/menu-autopager.webp" title="原寸で開く"><img src="assets/img/menu-autopager.webp" width="610" height="331" loading="lazy"
              alt="移動メニューの自動ページ送りサブメニュー"></a>
         <figcaption><b>移動 &gt; 自動ページ送り。</b>リーダー下部の早送りボタンからも同じ項目が出ます。</figcaption>
       </figure>
@@ -529,7 +529,7 @@ python3 scripts/bus.py '{"cmd":"applyRules","text":"明は明日、明暗を明�
       <h3>十　スリープタイマー</h3>
 
       <figure class="fig--inset">
-        <a href="assets/img/menu-sleep.webp" title="原寸で開く"><img src="assets/img/menu-sleep.webp" width="460" height="312" loading="lazy"
+        <a href="assets/img/menu-sleep.webp" title="原寸で開く"><img src="assets/img/menu-sleep.webp" width="783" height="310" loading="lazy"
              alt="読み上げメニューのスリープタイマーサブメニュー"></a>
         <figcaption><b>読み上げ &gt; スリープタイマー。</b>リーダー下部の月のボタンからも開けます。残り時間はボタンの横に数字で出ます。</figcaption>
       </figure>
@@ -565,7 +565,7 @@ python3 scripts/bus.py '{"cmd":"applyRules","text":"明は明日、明暗を明�
       <h3>十一　音声と動画の書き出し</h3>
 
       <figure class="fig--inset">
-        <a href="assets/img/menu-file.webp" title="原寸で開く"><img src="assets/img/menu-file.webp" width="460" height="320" loading="lazy"
+        <a href="assets/img/menu-file.webp" title="原寸で開く"><img src="assets/img/menu-file.webp" width="534" height="320" loading="lazy"
              alt="ファイルメニューと書き出しサブメニュー"></a>
         <figcaption><b>ファイル &gt; 書き出し。</b>リーダー下部の波形ボタン・フィルムボタンと同じ経路です。</figcaption>
       </figure>
@@ -681,7 +681,7 @@ python3 scripts/bus.py '{"cmd":"applyRules","text":"明は明日、明暗を明�
             <tr><th><kbd>⌘F</kbd></th><td>本文を検索（本を開いている間）</td></tr>
             <tr><th><kbd>⌘]</kbd></th><td>次のページ</td></tr>
             <tr><th><kbd>⌘[</kbd></th><td>前のページ</td></tr>
-            <tr><th><kbd>⌘=</kbd></th><td>文字を大きく</td></tr>
+            <tr><th><kbd>⌘=</kbd></th><td>文字を大きく（キーボードによっては <kbd>⌘;</kbd> と表示されます。同じキーです）</td></tr>
             <tr><th><kbd>⇧⌘-</kbd></th><td>文字を小さく</td></tr>
             <tr><th><kbd>⌘0</kbd></th><td>文字サイズを標準に戻す</td></tr>
             <tr><th><kbd>⌘W</kbd></th><td>閉じる</td></tr>
@@ -706,6 +706,9 @@ python3 scripts/bus.py '{"cmd":"applyRules","text":"明は明日、明暗を明�
       <div class="note">
         文字サイズが <kbd>⌘+</kbd> / <kbd>⌘-</kbd> でないのは、Mac Catalyst ではこの二つを OS 側が押さえていて、
         同じキーを割り当てた項目がメニューから消えてしまうためです。
+        「文字を大きく」はメニュー上で <kbd>⌘=</kbd> と <kbd>⌘;</kbd> のどちらで表示されることもあります。
+        macOS が今のキーボードに合わせて表記を変えているだけで、割り当てているキーは同じです
+        （このページの画面写真は <kbd>⌘;</kbd> と出ている環境で撮ったものです）。
       </div>
     </section>
 
